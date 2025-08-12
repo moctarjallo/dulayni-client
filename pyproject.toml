@@ -1,0 +1,21 @@
+[project]
+name = "dulayni-client"
+version = "0.1.0"
+description = "CLI client for interacting with dulayni RAG agents"
+readme = "README.md"
+authors = [
+    { name = "moctarjallo", email = "moctar.diallo@kajande.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.2.1",
+    "requests>=2.31.0",
+    "rich>=14.0.0",
+]
+
+[project.scripts]
+dulayni = "dulayni_client:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
