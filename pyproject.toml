@@ -1,7 +1,7 @@
 [project]
 name = "dulayni-client"
 version = "0.1.0"
-description = "CLI client for interacting with dulayni RAG agents"
+description = "CLI client and library for interacting with dulayni RAG agents"
 readme = "README.md"
 authors = [
     { name = "moctarjallo", email = "moctar.diallo@kajande.com" }
@@ -14,8 +14,33 @@ dependencies = [
 ]
 
 [project.scripts]
-dulayni = "dulayni_client:main"
+dulayni = "dulayni_client.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
