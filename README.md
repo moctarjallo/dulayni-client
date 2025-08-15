@@ -52,11 +52,19 @@ print(response)
 response = client.query(
     "Solve this problem",
     model="gpt-4o",
-    agent_type="deep_agent"
+    agent_type="deep_react"
 )
 
 # Get full JSON response
 json_response = client.query_json("Tell me a joke")
+
+# Health check with detailed status
+health_status = client.health_check()
+print("Server status:", health_status)
+
+# Simple health check
+if client.is_healthy():
+    print("Server is running!")
 
 # Conversation with thread continuity
 client.set_thread_id("my_conversation")
@@ -75,7 +83,7 @@ if client.health_check():
 Start an interactive REPL:
 
 ```bash
-dulayni -k $OPENAI_API_KEY
+dulayni-client -k $OPENAI_API_KEY
 ```
 
 #### Batch Query Mode
@@ -83,7 +91,7 @@ dulayni -k $OPENAI_API_KEY
 Run a single query non-interactively:
 
 ```bash
-dulayni -k $OPENAI_API_KEY -q "What's (3 + 5) x 12?" --print_mode rich
+dulayni-client -k $OPENAI_API_KEY -q "What's (3 + 5) x 12?" --print_mode rich
 ```
 
 ### CLI Options
@@ -91,7 +99,7 @@ dulayni -k $OPENAI_API_KEY -q "What's (3 + 5) x 12?" --print_mode rich
 * `-m, --model`: Model name (default: `gpt-4o-mini`)
 * `-k, --openai_api_key`: Your OpenAI API key
 * `-q, --query`: Query string for batch mode
-* `-a, --agent_type`: Agent type (`react` or `deep_agent`, default: `react`)
+* `-a, --agent_type`: Agent type (`react` or `deep_react`, default: `react`)
 * `--api_url`: Dulayni server URL (default: `http://localhost:8002/run_agent`)
 * `--thread_id`: Thread ID for conversation continuity (default: `default`)
 * `--print_mode`: `json` or `rich` output format
@@ -108,7 +116,7 @@ The main client class for interacting with dulayni agents.
 - `api_url` (str): URL of the Dulayni API server
 - `openai_api_key` (str): OpenAI API key for authentication
 - `model` (str): Model name to use (default: "gpt-4o-mini")
-- `agent_type` (str): Type of agent ("react" or "deep_agent")
+- `agent_type` (str): Type of agent ("react" or "deep_react")
 - `thread_id` (str): Thread ID for conversation continuity
 - `system_prompt` (str): Custom system prompt for the agent
 - `request_timeout` (float): Timeout for API requests in seconds
@@ -117,7 +125,8 @@ The main client class for interacting with dulayni agents.
 
 - `query(content: str, **kwargs) -> str`: Execute a query and return response text
 - `query_json(content: str, **kwargs) -> dict`: Execute a query and return full JSON
-- `health_check() -> bool`: Check if server is reachable
+- `health_check() -> dict`: Get detailed server health status
+- `is_healthy() -> bool`: Simple boolean check if server is healthy
 - `set_thread_id(thread_id: str)`: Set thread ID for conversation continuity
 - `set_system_prompt(prompt: str)`: Update the system prompt
 

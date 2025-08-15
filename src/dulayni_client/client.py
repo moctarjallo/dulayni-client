@@ -16,12 +16,13 @@ class DulayniClient:
         api_url: URL of the Dulayni API server
         openai_api_key: OpenAI API key for authentication
         model: Model name to use (default: "gpt-4o-mini")
-        agent_type: Type of agent ("react" or "deep_agent")
+        agent_type: Type of agent ("react" or "deep_react")
         thread_id: Thread ID for conversation continuity
         system_prompt: Custom system prompt for the agent
-        mcp_servers: Either a file path to MCP servers JSON config (server-side)
-                     or a JSON string with MCP server configuration
+        mcp_servers: Either a dictionary with MCP server configurations
+                     or None to use no MCP servers
         memory_db: Path to SQLite database for conversation memory
+        pg_uri: PostgreSQL URI for memory storage (alternative to SQLite)
         startup_timeout: Timeout for server startup
         parallel_tool_calls: Whether to enable parallel tool calls
         request_timeout: Timeout for API requests in seconds
@@ -43,8 +44,9 @@ class DulayniClient:
         agent_type: str = "react",
         thread_id: str = "default",
         system_prompt: Optional[str] = None,
-        mcp_servers: str = "config/mcp_servers.json",
+        mcp_servers: Optional[Dict[str, Any]] = None,
         memory_db: str = "memory.sqlite",
+        pg_uri: Optional[str] = None,
         startup_timeout: float = 10.0,
         parallel_tool_calls: bool = False,
         request_timeout: float = 30.0,
@@ -55,8 +57,9 @@ class DulayniClient:
         self.agent_type = agent_type
         self.thread_id = thread_id
         self.system_prompt = system_prompt or "You are a helpful agent"
-        self.mcp_servers = mcp_servers
+        self.mcp_servers = mcp_servers or {}
         self.memory_db = memory_db
+        self.pg_uri = pg_uri
         self.startup_timeout = startup_timeout
         self.parallel_tool_calls = parallel_tool_calls
         self.request_timeout = request_timeout
@@ -68,7 +71,7 @@ class DulayniClient:
         if self.model not in ["gpt-4o", "gpt-4o-mini"]:
             raise DulayniClientError(f"Unsupported model: {self.model}")
 
-        if self.agent_type not in ["react", "deep_agent"]:
+        if self.agent_type not in ["react", "deep_react"]:
             raise DulayniClientError(f"Unsupported agent type: {self.agent_type}")
 
     def query(self, content: str, **kwargs) -> str:
@@ -161,7 +164,8 @@ class DulayniClient:
             "system_prompt": kwargs.get("system_prompt", self.system_prompt),
             "thread_id": kwargs.get("thread_id", self.thread_id),
             "memory_db": kwargs.get("memory_db", self.memory_db),
-            "mcp_servers_file": kwargs.get("mcp_servers", self.mcp_servers),
+            "pg_uri": kwargs.get("pg_uri", self.pg_uri),
+            "mcp_servers": kwargs.get("mcp_servers", self.mcp_servers),
             "startup_timeout": self.startup_timeout,
             "parallel_tool_calls": self.parallel_tool_calls,
         }
@@ -178,20 +182,52 @@ class DulayniClient:
         """Set the memory database path."""
         self.memory_db = memory_db
 
-    def set_mcp_servers(self, mcp_servers: str) -> None:
-        """Set the MCP servers configuration (file path or JSON string)."""
+    def set_mcp_servers(self, mcp_servers: Dict[str, Any]) -> None:
+        """Set the MCP servers configuration dictionary."""
         self.mcp_servers = mcp_servers
 
-    def health_check(self) -> bool:
+    def set_pg_uri(self, pg_uri: str) -> None:
+        """Set the PostgreSQL URI for memory storage."""
+        self.pg_uri = pg_uri
+
+    def health_check(self) -> Dict[str, Any]:
         """
-        Check if the dulayni server is healthy and reachable.
+        Check if the dulayni server is healthy and reachable using the /health endpoint.
 
         Returns:
-            bool: True if server is reachable, False otherwise
+            Dict[str, Any]: Health status response from server, or error info if unreachable
         """
         try:
-            # Try a simple test query
-            self.query("ping", system_prompt="Respond with 'pong'")
-            return True
-        except (DulayniConnectionError, DulayniTimeoutError, DulayniClientError):
-            return False
+            # Use the server's health endpoint
+            health_url = self.api_url.replace("/run_agent", "/health")
+            response = requests.get(health_url, timeout=5.0)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.ConnectionError:
+            return {
+                "status": "error",
+                "error": "connection_error",
+                "message": f"Could not connect to dulayni server at {self.api_url}",
+            }
+        except requests.exceptions.Timeout:
+            return {
+                "status": "error",
+                "error": "timeout",
+                "message": "Health check request timed out",
+            }
+        except requests.exceptions.RequestException as e:
+            return {
+                "status": "error",
+                "error": "request_error",
+                "message": f"Health check failed: {str(e)}",
+            }
+
+    def is_healthy(self) -> bool:
+        """
+        Simple boolean check if server is healthy.
+
+        Returns:
+            bool: True if server is healthy, False otherwise
+        """
+        health_status = self.health_check()
+        return health_status.get("status") == "healthy"
