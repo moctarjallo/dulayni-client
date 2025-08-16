@@ -1,3 +1,4 @@
+# client.py
 import requests
 from typing import Optional, Dict, Any
 import json
@@ -12,20 +13,22 @@ class DulayniClient:
     This class provides both programmatic access to the dulayni server
     and can be used as a library in other applications.
 
+    All parameters are optional - if not provided, the server will use
+    defaults from its configuration file.
+
     Args:
         api_url: URL of the Dulayni API server
         openai_api_key: OpenAI API key for authentication
-        model: Model name to use (default: "gpt-4o-mini")
+        model: Model name to use
         agent_type: Type of agent ("react" or "deep_react")
         thread_id: Thread ID for conversation continuity
         system_prompt: Custom system prompt for the agent
-        mcp_servers: Either a dictionary with MCP server configurations
-                     or None to use no MCP servers
+        mcp_servers: Dictionary with MCP server configurations
         memory_db: Path to SQLite database for conversation memory
         pg_uri: PostgreSQL URI for memory storage (alternative to SQLite)
         startup_timeout: Timeout for server startup
         parallel_tool_calls: Whether to enable parallel tool calls
-        request_timeout: Timeout for API requests in seconds
+        request_timeout: Timeout for API requests in seconds (client-side only)
 
     Example:
         >>> client = DulayniClient(
@@ -38,41 +41,34 @@ class DulayniClient:
 
     def __init__(
         self,
-        api_url: str = "http://localhost:8002/run_agent",
-        openai_api_key: str = "",
-        model: str = "gpt-4o-mini",
-        agent_type: str = "react",
-        thread_id: str = "default",
+        api_url: Optional[str] = None,
+        openai_api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        thread_id: Optional[str] = None,
         system_prompt: Optional[str] = None,
         mcp_servers: Optional[Dict[str, Any]] = None,
-        memory_db: str = "memory.sqlite",
+        memory_db: Optional[str] = None,
         pg_uri: Optional[str] = None,
-        startup_timeout: float = 10.0,
-        parallel_tool_calls: bool = False,
-        request_timeout: float = 30.0,
+        startup_timeout: Optional[float] = None,
+        parallel_tool_calls: Optional[bool] = None,
+        request_timeout: float = 30.0,  # Client-side timeout, not sent to server
     ):
-        self.api_url = api_url
+        # Only set API URL default here since it's required for client functionality
+        self.api_url = api_url or "http://localhost:8002/run_agent"
+
+        # Store all parameters as-is (including None values)
         self.openai_api_key = openai_api_key
         self.model = model
         self.agent_type = agent_type
         self.thread_id = thread_id
-        self.system_prompt = system_prompt or "You are a helpful agent"
-        self.mcp_servers = mcp_servers or {}
+        self.system_prompt = system_prompt
+        self.mcp_servers = mcp_servers
         self.memory_db = memory_db
         self.pg_uri = pg_uri
         self.startup_timeout = startup_timeout
         self.parallel_tool_calls = parallel_tool_calls
         self.request_timeout = request_timeout
-
-        # Validate inputs
-        if not self.openai_api_key:
-            raise DulayniClientError("OpenAI API key is required")
-
-        if self.model not in ["gpt-4o", "gpt-4o-mini"]:
-            raise DulayniClientError(f"Unsupported model: {self.model}")
-
-        if self.agent_type not in ["react", "deep_react"]:
-            raise DulayniClientError(f"Unsupported agent type: {self.agent_type}")
 
     def query(self, content: str, **kwargs) -> str:
         """
@@ -80,13 +76,16 @@ class DulayniClient:
 
         Args:
             content: The query string to send to the agent
-            **kwargs: Additional parameters to override instance defaults
+            **kwargs: Additional parameters to override instance values
                 - model: Override the model for this query
                 - agent_type: Override the agent type for this query
                 - system_prompt: Override the system prompt for this query
                 - thread_id: Override the thread ID for this query
                 - memory_db: Override the memory database for this query
                 - mcp_servers: Override the MCP servers config for this query
+                - pg_uri: Override the PostgreSQL URI for this query
+                - startup_timeout: Override the startup timeout for this query
+                - parallel_tool_calls: Override parallel tool calls setting
 
         Returns:
             str: The response from the dulayni agent
@@ -123,7 +122,7 @@ class DulayniClient:
 
         Args:
             content: The query string to send to the agent
-            **kwargs: Additional parameters to override instance defaults
+            **kwargs: Additional parameters to override instance values
 
         Returns:
             Dict[str, Any]: The full JSON response from the server
@@ -155,40 +154,74 @@ class DulayniClient:
             raise DulayniClientError(f"API Error: {str(e)}")
 
     def _build_payload(self, content: str, **kwargs) -> Dict[str, Any]:
-        """Build the API payload with instance defaults and overrides."""
-        return {
-            "agent_type": kwargs.get("agent_type", self.agent_type),
-            "role": "user",
-            "model": kwargs.get("model", self.model),
-            "content": content,
-            "system_prompt": kwargs.get("system_prompt", self.system_prompt),
-            "thread_id": kwargs.get("thread_id", self.thread_id),
-            "memory_db": kwargs.get("memory_db", self.memory_db),
-            "pg_uri": kwargs.get("pg_uri", self.pg_uri),
-            "mcp_servers": kwargs.get("mcp_servers", self.mcp_servers),
-            "startup_timeout": self.startup_timeout,
-            "parallel_tool_calls": self.parallel_tool_calls,
+        """Build the API payload, only including non-null parameters."""
+        # Start with required fields
+        payload = {
+            "role": "user",  # Always required
+            "content": content,  # Always required
         }
 
-    def set_thread_id(self, thread_id: str) -> None:
+        # Add optional fields only if they are not None
+        # Priority: kwargs > instance values
+        optional_fields = [
+            "agent_type",
+            "model",
+            "system_prompt",
+            "thread_id",
+            "memory_db",
+            "pg_uri",
+            "mcp_servers",
+            "startup_timeout",
+            "parallel_tool_calls",
+        ]
+
+        for field in optional_fields:
+            # Check kwargs first, then instance values
+            value = kwargs.get(field)
+            if value is None:
+                value = getattr(self, field)
+
+            # Only add to payload if not None
+            if value is not None:
+                payload[field] = value
+
+        return payload
+
+    def set_thread_id(self, thread_id: Optional[str]) -> None:
         """Set the thread ID for conversation continuity."""
         self.thread_id = thread_id
 
-    def set_system_prompt(self, system_prompt: str) -> None:
+    def set_system_prompt(self, system_prompt: Optional[str]) -> None:
         """Set a new system prompt."""
         self.system_prompt = system_prompt
 
-    def set_memory_db(self, memory_db: str) -> None:
+    def set_memory_db(self, memory_db: Optional[str]) -> None:
         """Set the memory database path."""
         self.memory_db = memory_db
 
-    def set_mcp_servers(self, mcp_servers: Dict[str, Any]) -> None:
+    def set_mcp_servers(self, mcp_servers: Optional[Dict[str, Any]]) -> None:
         """Set the MCP servers configuration dictionary."""
         self.mcp_servers = mcp_servers
 
-    def set_pg_uri(self, pg_uri: str) -> None:
+    def set_pg_uri(self, pg_uri: Optional[str]) -> None:
         """Set the PostgreSQL URI for memory storage."""
         self.pg_uri = pg_uri
+
+    def set_model(self, model: Optional[str]) -> None:
+        """Set the model name."""
+        self.model = model
+
+    def set_agent_type(self, agent_type: Optional[str]) -> None:
+        """Set the agent type."""
+        self.agent_type = agent_type
+
+    def set_parallel_tool_calls(self, parallel_tool_calls: Optional[bool]) -> None:
+        """Set the parallel tool calls setting."""
+        self.parallel_tool_calls = parallel_tool_calls
+
+    def set_startup_timeout(self, startup_timeout: Optional[float]) -> None:
+        """Set the startup timeout."""
+        self.startup_timeout = startup_timeout
 
     def health_check(self) -> Dict[str, Any]:
         """
