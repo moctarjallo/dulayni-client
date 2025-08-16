@@ -52,7 +52,7 @@ class DulayniClient:
         pg_uri: Optional[str] = None,
         startup_timeout: Optional[float] = None,
         parallel_tool_calls: Optional[bool] = None,
-        request_timeout: float = 30.0,  # Client-side timeout, not sent to server
+        request_timeout: float = 300.0,  # Client-side timeout, not sent to server
     ):
         # Only set API URL default here since it's required for client functionality
         self.api_url = api_url or "http://localhost:8002/run_agent"
