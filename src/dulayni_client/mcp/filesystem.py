@@ -21,11 +21,11 @@ import difflib
 import base64
 import mimetypes
 from dataclasses import dataclass
+import argparse
 
 from fastmcp import FastMCP
 import aiofiles
 import aiofiles.os
-
 
 @dataclass
 class FileInfo:
@@ -37,7 +37,6 @@ class FileInfo:
     is_directory: bool
     is_file: bool
     permissions: str
-
 
 class PathValidator:
     """Handles path validation and security checks."""
@@ -105,7 +104,6 @@ class PathValidator:
         
         return absolute_path
 
-
 class DulayniFileSystemMCP:
     """MCP server for filesystem operations integrated with dulayni-client."""
     
@@ -131,14 +129,6 @@ class DulayniFileSystemMCP:
             the first N lines of a file, or the 'tail' parameter to read only
             the last N lines of a file. Operates on the file as text regardless of extension.
             Only works within allowed directories.
-            
-            Args:
-                path: File path to read
-                head: If provided, returns only the first N lines of the file
-                tail: If provided, returns only the last N lines of the file
-            
-            Returns:
-                File contents as string
             """
             if head is not None and tail is not None:
                 raise ValueError("Cannot specify both head and tail parameters simultaneously")
@@ -158,12 +148,6 @@ class DulayniFileSystemMCP:
             """
             Read an image or audio file. Returns the base64 encoded data and MIME type.
             Only works within allowed directories.
-            
-            Args:
-                path: Path to the media file
-                
-            Returns:
-                Dictionary with 'data', 'mimeType', and 'type' keys
             """
             validated_path = await self.path_validator.validate_path(path)
             
@@ -200,12 +184,6 @@ class DulayniFileSystemMCP:
             or compare multiple files. Each file's content is returned with its
             path as a reference. Failed reads for individual files won't stop
             the entire operation. Only works within allowed directories.
-            
-            Args:
-                paths: List of file paths to read
-                
-            Returns:
-                Combined file contents with path headers
             """
             results = []
             
@@ -226,13 +204,6 @@ class DulayniFileSystemMCP:
             Create a new file or completely overwrite an existing file with new content.
             Use with caution as it will overwrite existing files without warning.
             Handles text content with proper encoding. Only works within allowed directories.
-            
-            Args:
-                path: File path to write to
-                content: Content to write to the file
-                
-            Returns:
-                Success message
             """
             validated_path = await self.path_validator.validate_path(path)
             
@@ -263,45 +234,10 @@ class DulayniFileSystemMCP:
             Make line-based edits to a text file. Each edit replaces exact line sequences
             with new content. Returns a git-style diff showing the changes made.
             Only works within allowed directories.
-            
-            Args:
-                path: File path to edit
-                edits: List of edit operations with 'oldText' and 'newText' keys
-                dry_run: Preview changes using git-style diff format
-                
-            Returns:
-                Git-style diff showing the changes
             """
             validated_path = await self.path_validator.validate_path(path)
-            
-            # Read current content
-            async with aiofiles.open(validated_path, 'r', encoding='utf-8') as f:
-                original_content = await f.read()
-            
-            modified_content = original_content
-            
-            # Apply edits sequentially
-            for edit in edits:
-                old_text = edit.get('oldText', '')
-                new_text = edit.get('newText', '')
-                
-                if old_text in modified_content:
-                    modified_content = modified_content.replace(old_text, new_text, 1)
-                else:
-                    # Try line-by-line matching with whitespace flexibility
-                    result = self._apply_flexible_edit(modified_content, old_text, new_text, apply=True)
-                    if result == modified_content:  # No change means no match found
-                        raise ValueError(f"Could not find exact match for edit:\n{old_text}")
-                    modified_content = result
-            
-            # Create unified diff
-            diff = self._create_unified_diff(original_content, modified_content, str(validated_path))
-            
-            # Write changes if not dry run
-            if not dry_run:
-                await self.write_file(path, modified_content)
-            
-            return diff
+            result = await self._apply_file_edits(validated_path, edits, dry_run)
+            return result
         
         @self.mcp.tool()
         async def create_directory(path: str) -> str:
@@ -310,12 +246,6 @@ class DulayniFileSystemMCP:
             nested directories in one operation. If the directory already exists,
             this operation will succeed silently. Perfect for setting up directory
             structures for projects or ensuring required paths exist. Only works within allowed directories.
-            
-            Args:
-                path: Directory path to create
-                
-            Returns:
-                Success message
             """
             validated_path = await self.path_validator.validate_path(path)
             validated_path.mkdir(parents=True, exist_ok=True)
@@ -328,12 +258,6 @@ class DulayniFileSystemMCP:
             Results clearly distinguish between files and directories with [FILE] and [DIR]
             prefixes. This tool is essential for understanding directory structure and
             finding specific files within a directory. Only works within allowed directories.
-            
-            Args:
-                path: Directory path to list
-                
-            Returns:
-                Formatted directory listing
             """
             validated_path = await self.path_validator.validate_path(path)
             
@@ -357,13 +281,6 @@ class DulayniFileSystemMCP:
             Results clearly distinguish between files and directories with [FILE] and [DIR]
             prefixes. This tool is useful for understanding directory structure and
             finding specific files within a directory. Only works within allowed directories.
-            
-            Args:
-                path: Directory path to list
-                sort_by: Sort entries by name or size
-                
-            Returns:
-                Formatted directory listing with sizes
             """
             validated_path = await self.path_validator.validate_path(path)
             
@@ -426,12 +343,6 @@ class DulayniFileSystemMCP:
             Each entry includes 'name', 'type' (file/directory), and 'children' for directories.
             Files have no children array, while directories always have a children array (which may be empty).
             The output is formatted with 2-space indentation for readability. Only works within allowed directories.
-            
-            Args:
-                path: Directory path to get tree for
-                
-            Returns:
-                JSON string representing the directory tree
             """
             validated_path = await self.path_validator.validate_path(path)
             tree = await self._build_directory_tree(validated_path)
@@ -444,13 +355,6 @@ class DulayniFileSystemMCP:
             and rename them in a single operation. If the destination exists, the
             operation will fail. Works across different directories and can be used
             for simple renaming within the same directory. Both source and destination must be within allowed directories.
-            
-            Args:
-                source: Source path
-                destination: Destination path
-                
-            Returns:
-                Success message
             """
             validated_source = await self.path_validator.validate_path(source)
             validated_dest = await self.path_validator.validate_path(destination)
@@ -473,14 +377,6 @@ class DulayniFileSystemMCP:
             is case-insensitive and matches partial names. Returns full paths to all
             matching items. Great for finding files when you don't know their exact location.
             Only searches within allowed directories.
-            
-            Args:
-                path: Starting directory path
-                pattern: Search pattern (case-insensitive)
-                exclude_patterns: Patterns to exclude from search
-                
-            Returns:
-                Newline-separated list of matching file paths
             """
             if exclude_patterns is None:
                 exclude_patterns = []
@@ -499,12 +395,6 @@ class DulayniFileSystemMCP:
             information including size, creation time, last modified time, permissions,
             and type. This tool is perfect for understanding file characteristics
             without reading the actual content. Only works within allowed directories.
-            
-            Args:
-                path: File or directory path
-                
-            Returns:
-                Formatted file information
             """
             validated_path = await self.path_validator.validate_path(path)
             info = await self._get_file_stats(validated_path)
@@ -516,9 +406,6 @@ class DulayniFileSystemMCP:
             """
             Returns the list of directories that this server is allowed to access.
             Use this to understand which directories are available before trying to access files.
-            
-            Returns:
-                List of allowed directories
             """
             directories = [str(d) for d in self.path_validator.allowed_directories]
             return f"Allowed directories:\n" + "\n".join(directories)
@@ -578,6 +465,41 @@ class DulayniFileSystemMCP:
                     break
         
         return '\n'.join(lines)
+    
+    async def _apply_file_edits(
+        self,
+        file_path: Path,
+        edits: List[Dict[str, str]],
+        dry_run: bool = False
+    ) -> str:
+        """Apply edits to a file and return diff."""
+        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+            original_content = await f.read()
+        
+        modified_content = original_content
+        
+        # Apply edits sequentially
+        for edit in edits:
+            old_text = edit.get('oldText', '')
+            new_text = edit.get('newText', '')
+            
+            if old_text in modified_content:
+                modified_content = modified_content.replace(old_text, new_text, 1)
+            else:
+                # Try line-by-line matching with whitespace flexibility
+                result = self._apply_flexible_edit(modified_content, old_text, new_text, apply=True)
+                if result == modified_content:  # No change means no match found
+                    raise ValueError(f"Could not find exact match for edit:\n{old_text}")
+                modified_content = result
+        
+        # Create unified diff
+        diff = self._create_unified_diff(original_content, modified_content, str(file_path))
+        
+        # Write changes if not dry run
+        if not dry_run:
+            await self.write_file(str(file_path), modified_content)
+        
+        return diff
     
     def _apply_flexible_edit(self, content: str, old_text: str, new_text: str, apply: bool = False) -> Union[bool, str]:
         """Apply edit with flexible whitespace matching."""
@@ -736,40 +658,13 @@ class DulayniFileSystemMCP:
         """Start the MCP server."""
         self.mcp.run(transport="streamable-http", stateless_http=True, host=host, port=port)
 
-
-# Backward compatibility with the original simple function
-def ls(path: str) -> list:
-    """Use this tool to physically list all files in given `path`"""
-    return os.listdir(path)
-
-
-def start_server(host: str = "0.0.0.0", port: int = 8003):
-    """Start the dulayni filesystem MCP server with default allowed directories."""
-    # Default to current working directory if no specific directories are provided
-    allowed_directories = [os.getcwd()]
-    
-    server = DulayniFileSystemMCP(allowed_directories)
-    print(f"Starting Dulayni MCP Filesystem Server on {host}:{port}")
-    print(f"Allowed directories: {', '.join(allowed_directories)}")
-    
-    try:
-        server.start_server(host, port)
-    except KeyboardInterrupt:
-        print("\nShutting down server...")
-    except Exception as e:
-        print(f"Server error: {e}")
-        sys.exit(1)
-
-
 def main():
     """Main entry point for the MCP filesystem server."""
-    import argparse
-    
     parser = argparse.ArgumentParser(description="Dulayni MCP Filesystem Server")
     parser.add_argument(
         "directories",
-        nargs='*',  # Allow 0 or more directories
-        default=[os.getcwd()],  # Default to current directory
+        nargs='*',
+        default=[os.getcwd()],
         help="Allowed directories for filesystem operations (default: current directory)"
     )
     parser.add_argument(
@@ -811,7 +706,6 @@ def main():
     except Exception as e:
         print(f"Server error: {e}")
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

@@ -1,4 +1,7 @@
-# cli.py
+# -> src/dulayni_client/cli.py
+#!/usr/bin/env python3
+"""Dulayni CLI Client - Interact with dulayni RAG agents via API."""
+
 import os
 import json
 from pathlib import Path
@@ -9,6 +12,7 @@ from rich.markdown import Markdown
 
 from .client import DulayniClient
 from .exceptions import DulayniClientError, DulayniConnectionError, DulayniTimeoutError
+from .mcp.start import start_server, DEFAULT_PORT
 
 console = Console()
 
@@ -34,15 +38,14 @@ def load_config(config_path: str) -> Dict[str, Any]:
 
 
 def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]:
-    """Merge configuration with CLI arguments, giving priority to CLI args. Only include non-null values."""
+    """Merge configuration with CLI arguments, giving priority to CLI args."""
     merged = {}
 
-    # Helper function to add non-null values
     def add_if_not_none(key: str, value: Any) -> None:
         if value is not None:
             merged[key] = value
 
-    # Agent configuration - only add if explicitly set
+    # Agent configuration
     agent_config = config.get("agent", {})
     add_if_not_none("model", cli_args.get("model") or agent_config.get("model"))
     add_if_not_none(
@@ -61,7 +64,7 @@ def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]
         cli_args.get("parallel_tool_calls") or agent_config.get("parallel_tool_calls"),
     )
 
-    # Memory configuration - only add if explicitly set
+    # Memory configuration
     memory_config = config.get("memory", {})
     add_if_not_none(
         "memory_db", cli_args.get("memory_db") or memory_config.get("memory_db")
@@ -71,15 +74,15 @@ def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]
         "thread_id", cli_args.get("thread_id") or memory_config.get("thread_id")
     )
 
-    # MCP servers configuration - only add if exists in config
+    # MCP servers configuration
     mcp_servers = config.get("mcpServers")
     if mcp_servers:
         merged["mcp_servers"] = mcp_servers
 
-    # API configuration - only add if explicitly set
+    # API configuration
     add_if_not_none("api_url", cli_args.get("api_url") or config.get("api_url"))
 
-    # OpenAI API key handling (special case - can come from env var)
+    # OpenAI API key handling
     openai_key = (
         cli_args.get("openai_api_key")
         or config.get("openai_api_key")
@@ -102,65 +105,39 @@ def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]
     help="Path to configuration JSON file",
 )
 @click.option(
-    "--model",
-    "-m",
-    type=click.Choice(["gpt-4o", "gpt-4o-mini"]),
-    help="Model name (overrides config)",
+    "--model", "-m", type=click.Choice(["gpt-4o", "gpt-4o-mini"]), help="Model name"
+)
+@click.option("--openai_api_key", "-k", help="OpenAI API key")
+@click.option("--query", "-q", type=str, help="Query string for batch mode")
+@click.option("--memory_db", help="Path to SQLite database for conversation memory")
+@click.option("--pg_uri", help="PostgreSQL URI for memory storage")
+@click.option("--startup_timeout", "-t", type=float, help="Timeout for server startup")
+@click.option(
+    "--parallel_tool_calls", "-p", is_flag=True, help="Enable parallel tool calls"
 )
 @click.option(
-    "--openai_api_key",
-    "-k",
-    help="OpenAI API key (overrides config and env var)",
-)
-@click.option(
-    "--query", "-q", type=str, required=False, help="Query string for batch mode"
-)
-@click.option(
-    "--memory_db",
-    help="Path to SQLite database for conversation memory (overrides config)",
-)
-@click.option("--pg_uri", help="PostgreSQL URI for memory storage (overrides config)")
-@click.option(
-    "--startup_timeout",
-    "-t",
-    type=float,
-    help="Timeout for server startup (overrides config)",
-)
-@click.option(
-    "--parallel_tool_calls",
-    "-p",
-    is_flag=True,
-    help="Enable parallel tool calls (overrides config)",
-)
-@click.option(
-    "--agent_type",
-    "-a",
-    type=click.Choice(["react", "deep_react"]),
-    help="Agent type (overrides config)",
+    "--agent_type", "-a", type=click.Choice(["react", "deep_react"]), help="Agent type"
 )
 @click.option(
     "--print_mode",
     default="rich",
     type=click.Choice(["json", "rich"]),
-    help="Output format for responses",
+    help="Output format",
 )
-@click.option(
-    "--system_prompt",
-    "-s",
-    help="Custom system prompt for the agent (overrides config)",
-)
-@click.option("--api_url", help="URL of the Dulayni API server (overrides config)")
-@click.option(
-    "--thread_id", help="Thread ID for conversation continuity (overrides config)"
-)
+@click.option("--system_prompt", "-s", help="Custom system prompt for the agent")
+@click.option("--api_url", help="URL of the Dulayni API server")
+@click.option("--thread_id", help="Thread ID for conversation continuity")
 def main(**cli_args):
     """Dulayni CLI Client - Interact with dulayni RAG agents via API"""
+
+    # Start MCP filesystem server in background
+    start_server(port=DEFAULT_PORT)
 
     # Load configuration file
     config_path = cli_args.pop("config")
     config = load_config(config_path)
 
-    # Merge config with CLI arguments (CLI takes priority), only non-null values
+    # Merge config with CLI arguments
     merged_config = merge_config_with_args(config, **cli_args)
 
     try:
@@ -207,6 +184,8 @@ def main(**cli_args):
         console.print(
             "[bold green]Dulayni Client - Interactive mode. Type 'q' to quit.[/bold green]"
         )
+
+        # Print configuration info
         console.print(f"[yellow]Config file: {config_path}[/yellow]")
         console.print(
             f"[yellow]API endpoint: {merged_config.get('api_url', 'server default')}[/yellow]"
