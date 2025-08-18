@@ -1,4 +1,3 @@
-#-> src/dulayni_client/mcp/start.py
 import os
 import sys
 import subprocess
@@ -25,7 +24,7 @@ def start_server(port: int = DEFAULT_PORT, directories: Optional[list] = None):
         print(f"MCP filesystem server already running on port {port}")
         return
 
-    # Get current directory if no directories specified
+    # FIXED: Get current directory at runtime, not import time
     if not directories:
         directories = [str(Path.cwd())]
     

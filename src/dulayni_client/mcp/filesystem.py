@@ -664,7 +664,6 @@ def main():
     parser.add_argument(
         "directories",
         nargs='*',
-        default=[os.getcwd()],
         help="Allowed directories for filesystem operations (default: current directory)"
     )
     parser.add_argument(
@@ -681,7 +680,7 @@ def main():
     
     args = parser.parse_args()
     
-    # If no directories specified, use current directory
+    # FIXED: Use current working directory at runtime, not import time
     directories = args.directories if args.directories else [os.getcwd()]
     
     # Validate that all directories exist and are accessible
