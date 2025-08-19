@@ -17,3 +17,9 @@ class DulayniTimeoutError(DulayniClientError):
     """Raised when a request to the dulayni server times out."""
 
     pass
+
+
+class DulayniAuthenticationError(DulayniClientError):
+    """Raised when authentication fails or is required."""
+
+    pass

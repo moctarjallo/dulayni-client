@@ -1,4 +1,18 @@
-# dulayni-client
+## Authentication Flow
+
+The dulayni-client implements a secure two-factor authentication system:
+
+1. **Request Verification**: Client sends phone number to `/auth` endpoint
+2. **Receive Code**: Server sends 4-digit verification code via WhatsApp
+3. **Verify Code**: Client submits the code to `/verify` endpoint  
+4. **Get Token**: Server returns authentication token for API access
+5. **Make Queries**: All subsequent queries include the auth token
+
+### Authentication Examples
+
+#### Programmatic Authentication
+```python
+from dulayni_client import DulayniClient, Dul# dulayni-client
 
 A CLI client and Python library for interacting with dulayni RAG agents via API.
 
@@ -28,7 +42,7 @@ A CLI client and Python library for interacting with dulayni RAG agents via API.
 4. **Set environment variables**:
 
    ```bash
-   export OPENAI_API_KEY="your_api_key_here"
+   export PHONE_NUMBER="+1234567890"
    ```
 
 ## Usage
@@ -40,13 +54,30 @@ from dulayni_client import DulayniClient
 
 # Initialize the client
 client = DulayniClient(
-    openai_api_key="your-api-key",
-    api_url="http://localhost:8002/run_agent"
+    phone_number="+1234567890",
+    api_url="http://localhost:8002"
 )
 
-# Simple query
+# Authenticate (will prompt for verification code)
+def get_verification_code():
+    return input("Enter 4-digit verification code: ")
+
+client.request_verification_code()
+code = get_verification_code()
+client.verify_code(code)
+
+# Now you can make queries
 response = client.query("What's the weather like?")
 print(response)
+
+# Alternative: handle authentication manually
+client = DulayniClient(phone_number="+1234567890")
+auth_result = client.request_verification_code()
+print(f"Verification code sent! Session ID: {auth_result['session_id']}")
+
+# User receives code via WhatsApp, then:
+verification_code = "1234"  # Code from WhatsApp
+client.verify_code(verification_code)
 
 # Query with custom parameters
 response = client.query(
@@ -70,34 +101,39 @@ if client.is_healthy():
 client.set_thread_id("my_conversation")
 client.query("My name is John")
 response = client.query("What's my name?")  # Should remember "John"
-
-# Health check
-if client.health_check():
-    print("Server is running!")
 ```
 
 ### CLI Usage
+
+The CLI handles the authentication flow automatically by prompting for the verification code.
 
 #### Interactive Mode
 
 Start an interactive REPL:
 
 ```bash
-dulayni-client -k $OPENAI_API_KEY
+dulayni-client -p "+1234567890"
 ```
+
+The client will:
+1. Send a verification code to your WhatsApp
+2. Prompt you to enter the 4-digit code
+3. Start the interactive session once authenticated
 
 #### Batch Query Mode
 
 Run a single query non-interactively:
 
 ```bash
-dulayni-client -k $OPENAI_API_KEY -q "What's (3 + 5) x 12?" --print_mode rich
+dulayni-client -p "+1234567890" -q "What's (3 + 5) x 12?" --print_mode rich
 ```
+
+The authentication flow will complete before executing the query.
 
 ### CLI Options
 
 * `-m, --model`: Model name (default: `gpt-4o-mini`)
-* `-k, --openai_api_key`: Your OpenAI API key
+* `-p, --phone-number`: Your phone number for authentication (required)
 * `-q, --query`: Query string for batch mode
 * `-a, --agent_type`: Agent type (`react` or `deep_react`, default: `react`)
 * `--api_url`: Dulayni server URL (default: `http://localhost:8002/run_agent`)
@@ -113,28 +149,41 @@ The main client class for interacting with dulayni agents.
 
 #### Constructor Parameters
 
-- `api_url` (str): URL of the Dulayni API server
-- `openai_api_key` (str): OpenAI API key for authentication
+- `api_url` (str): URL of the Dulayni API server (without /run_agent suffix)
+- `phone_number` (str): Phone number for authentication
 - `model` (str): Model name to use (default: "gpt-4o-mini")
 - `agent_type` (str): Type of agent ("react" or "deep_react")
 - `thread_id` (str): Thread ID for conversation continuity
 - `system_prompt` (str): Custom system prompt for the agent
+- `mcp_servers` (dict): MCP server configurations
+- `memory_db` (str): Path to SQLite database for conversation memory
+- `pg_uri` (str): PostgreSQL URI for memory storage
 - `request_timeout` (float): Timeout for API requests in seconds
 
 #### Methods
 
+##### Authentication Methods
+- `request_verification_code(phone_number: str = None) -> dict`: Request verification code via WhatsApp
+- `verify_code(verification_code: str, session_id: str = None) -> dict`: Verify the 4-digit code
+- `authenticate(verification_code_callback = None) -> bool`: Complete authentication flow
+
+##### Query Methods
 - `query(content: str, **kwargs) -> str`: Execute a query and return response text
 - `query_json(content: str, **kwargs) -> dict`: Execute a query and return full JSON
+
+##### Utility Methods
 - `health_check() -> dict`: Get detailed server health status
 - `is_healthy() -> bool`: Simple boolean check if server is healthy
 - `set_thread_id(thread_id: str)`: Set thread ID for conversation continuity
 - `set_system_prompt(prompt: str)`: Update the system prompt
+- `set_phone_number(phone_number: str)`: Update the phone number (resets authentication)
 
 #### Exceptions
 
 - `DulayniClientError`: Base exception for client errors
 - `DulayniConnectionError`: Raised when unable to connect to server
 - `DulayniTimeoutError`: Raised when requests time out
+- `DulayniAuthenticationError`: Raised when authentication fails or is required
 
 ## Examples
 
@@ -143,7 +192,7 @@ See the `examples/` directory for more detailed usage examples.
 ## Requirements
 
 - dulayni server running on the specified API URL
-- OpenAI API key
+- Phone number for authentication
 - Python 3.12+
 
 ## Development

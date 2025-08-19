@@ -3,7 +3,12 @@ import requests
 from typing import Optional, Dict, Any
 import json
 
-from .exceptions import DulayniClientError, DulayniConnectionError, DulayniTimeoutError
+from .exceptions import (
+    DulayniClientError,
+    DulayniConnectionError,
+    DulayniTimeoutError,
+    DulayniAuthenticationError,
+)
 
 
 class DulayniClient:
@@ -13,12 +18,18 @@ class DulayniClient:
     This class provides both programmatic access to the dulayni server
     and can be used as a library in other applications.
 
+    The client implements a two-factor authentication flow:
+    1. User provides phone number
+    2. Backend sends 4-digit verification code via WhatsApp
+    3. User enters verification code
+    4. Client can then make queries
+
     All parameters are optional - if not provided, the server will use
     defaults from its configuration file.
 
     Args:
         api_url: URL of the Dulayni API server
-        openai_api_key: OpenAI API key for authentication
+        phone_number: Phone number for authentication
         model: Model name to use
         agent_type: Type of agent ("react" or "deep_react")
         thread_id: Thread ID for conversation continuity
@@ -26,15 +37,14 @@ class DulayniClient:
         mcp_servers: Dictionary with MCP server configurations
         memory_db: Path to SQLite database for conversation memory
         pg_uri: PostgreSQL URI for memory storage (alternative to SQLite)
-        startup_timeout: Timeout for server startup
-        parallel_tool_calls: Whether to enable parallel tool calls
         request_timeout: Timeout for API requests in seconds (client-side only)
 
     Example:
         >>> client = DulayniClient(
-        ...     openai_api_key="your-key-here",
-        ...     api_url="http://localhost:8002/run_agent"
+        ...     phone_number="+1234567890",
+        ...     api_url="http://localhost:8002"
         ... )
+        >>> # Authentication happens automatically on first query
         >>> response = client.query("What's 2+2?")
         >>> print(response)
     """
@@ -42,7 +52,7 @@ class DulayniClient:
     def __init__(
         self,
         api_url: Optional[str] = None,
-        openai_api_key: Optional[str] = None,
+        phone_number: Optional[str] = None,
         model: Optional[str] = None,
         agent_type: Optional[str] = None,
         thread_id: Optional[str] = None,
@@ -50,15 +60,20 @@ class DulayniClient:
         mcp_servers: Optional[Dict[str, Any]] = None,
         memory_db: Optional[str] = None,
         pg_uri: Optional[str] = None,
-        startup_timeout: Optional[float] = None,
-        parallel_tool_calls: Optional[bool] = None,
         request_timeout: float = 300.0,  # Client-side timeout, not sent to server
     ):
-        # Only set API URL default here since it's required for client functionality
-        self.api_url = api_url or "http://localhost:8002/run_agent"
+        # Set API URL default, but remove /run_agent suffix for flexibility
+        if api_url:
+            self.base_url = api_url.rstrip("/").replace("/run_agent", "")
+        else:
+            self.base_url = "http://localhost:8002"
+
+        self.api_url = f"{self.base_url}/run_agent"
+        self.auth_url = f"{self.base_url}/auth"
+        self.verify_url = f"{self.base_url}/verify"
 
         # Store all parameters as-is (including None values)
-        self.openai_api_key = openai_api_key
+        self.phone_number = phone_number
         self.model = model
         self.agent_type = agent_type
         self.thread_id = thread_id
@@ -66,13 +81,160 @@ class DulayniClient:
         self.mcp_servers = mcp_servers
         self.memory_db = memory_db
         self.pg_uri = pg_uri
-        self.startup_timeout = startup_timeout
-        self.parallel_tool_calls = parallel_tool_calls
         self.request_timeout = request_timeout
+
+        # Authentication state
+        self.is_authenticated = False
+        self.auth_token = None
+        self.verification_session_id = None
+
+    def request_verification_code(
+        self, phone_number: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Request a verification code to be sent via WhatsApp.
+
+        Args:
+            phone_number: Phone number to send code to. If not provided, uses instance phone_number.
+
+        Returns:
+            Dict containing session_id and status
+
+        Raises:
+            DulayniAuthenticationError: If phone number is invalid or request fails
+            DulayniConnectionError: If unable to connect to server
+        """
+        phone = phone_number or self.phone_number
+        if not phone:
+            raise DulayniAuthenticationError(
+                "Phone number is required for authentication"
+            )
+
+        payload = {"phone_number": phone}
+
+        try:
+            response = requests.post(
+                self.auth_url, json=payload, timeout=self.request_timeout
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            self.verification_session_id = result.get("session_id")
+
+            # Update phone number if provided
+            if phone_number:
+                self.phone_number = phone_number
+
+            return result
+
+        except requests.exceptions.ConnectionError:
+            raise DulayniConnectionError(
+                f"Could not connect to dulayni server at {self.auth_url}. "
+                "Make sure the server is running."
+            )
+        except requests.exceptions.RequestException as e:
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    raise DulayniAuthenticationError(
+                        f"Authentication failed: {error_data.get('message', str(e))}"
+                    )
+                except json.JSONDecodeError:
+                    pass
+            raise DulayniAuthenticationError(f"Authentication request failed: {str(e)}")
+
+    def verify_code(
+        self, verification_code: str, session_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Verify the 4-digit code received via WhatsApp.
+
+        Args:
+            verification_code: 4-digit verification code
+            session_id: Session ID from request_verification_code. If not provided, uses stored session_id.
+
+        Returns:
+            Dict containing auth_token and status
+
+        Raises:
+            DulayniAuthenticationError: If verification fails
+            DulayniConnectionError: If unable to connect to server
+        """
+        session = session_id or self.verification_session_id
+        if not session:
+            raise DulayniAuthenticationError(
+                "No verification session. Call request_verification_code() first."
+            )
+
+        payload = {"session_id": session, "verification_code": verification_code}
+
+        try:
+            response = requests.post(
+                self.verify_url, json=payload, timeout=self.request_timeout
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            self.auth_token = result.get("auth_token")
+            self.is_authenticated = bool(self.auth_token)
+
+            return result
+
+        except requests.exceptions.ConnectionError:
+            raise DulayniConnectionError(
+                f"Could not connect to dulayni server at {self.verify_url}. "
+                "Make sure the server is running."
+            )
+        except requests.exceptions.RequestException as e:
+            if hasattr(e, "response") and e.response is not None:
+                try:
+                    error_data = e.response.json()
+                    raise DulayniAuthenticationError(
+                        f"Verification failed: {error_data.get('message', str(e))}"
+                    )
+                except json.JSONDecodeError:
+                    pass
+            raise DulayniAuthenticationError(f"Verification request failed: {str(e)}")
+
+    def authenticate(self, verification_code_callback=None) -> bool:
+        """
+        Complete authentication flow: request code and verify it.
+
+        Args:
+            verification_code_callback: Function that prompts user for verification code.
+                                      If not provided, will raise an exception with session_id.
+
+        Returns:
+            bool: True if authentication successful
+
+        Raises:
+            DulayniAuthenticationError: If authentication fails or phone number not set
+        """
+        if not self.phone_number:
+            raise DulayniAuthenticationError(
+                "Phone number must be set before authentication"
+            )
+
+        # Request verification code
+        auth_result = self.request_verification_code()
+
+        if verification_code_callback:
+            # Interactive flow
+            code = verification_code_callback()
+            verify_result = self.verify_code(code)
+            return self.is_authenticated
+        else:
+            # Non-interactive - caller needs to handle verification separately
+            raise DulayniAuthenticationError(
+                f"Verification code sent to {self.phone_number}. "
+                f"Call verify_code() with the 4-digit code. Session ID: {auth_result.get('session_id')}"
+            )
 
     def query(self, content: str, **kwargs) -> str:
         """
         Execute a query against the dulayni agent.
+
+        Automatically handles authentication if not already authenticated.
 
         Args:
             content: The query string to send to the agent
@@ -84,23 +246,41 @@ class DulayniClient:
                 - memory_db: Override the memory database for this query
                 - mcp_servers: Override the MCP servers config for this query
                 - pg_uri: Override the PostgreSQL URI for this query
-                - startup_timeout: Override the startup timeout for this query
-                - parallel_tool_calls: Override parallel tool calls setting
 
         Returns:
             str: The response from the dulayni agent
 
         Raises:
+            DulayniAuthenticationError: If authentication is required but fails
             DulayniConnectionError: If unable to connect to the server
             DulayniTimeoutError: If the request times out
             DulayniClientError: For other API errors
         """
+        # Check authentication
+        if not self.is_authenticated:
+            raise DulayniAuthenticationError(
+                "Authentication required. Call authenticate() or verify_code() first."
+            )
+
         payload = self._build_payload(content, **kwargs)
 
         try:
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
             response = requests.post(
-                self.api_url, json=payload, timeout=self.request_timeout
+                self.api_url,
+                json=payload,
+                headers=headers,
+                timeout=self.request_timeout,
             )
+
+            # Handle authentication errors
+            if response.status_code == 401:
+                self.is_authenticated = False
+                self.auth_token = None
+                raise DulayniAuthenticationError(
+                    "Authentication expired. Please authenticate again."
+                )
+
             response.raise_for_status()
             return response.json().get("response", "")
 
@@ -114,7 +294,11 @@ class DulayniClient:
                 "Request timed out. The query may be taking too long to process."
             )
         except requests.exceptions.RequestException as e:
-            raise DulayniClientError(f"API Error: {str(e)}")
+            if hasattr(e, "response") and e.response and e.response.status_code == 401:
+                # Already handled above
+                pass
+            else:
+                raise DulayniClientError(f"API Error: {str(e)}")
 
     def query_json(self, content: str, **kwargs) -> Dict[str, Any]:
         """
@@ -128,16 +312,36 @@ class DulayniClient:
             Dict[str, Any]: The full JSON response from the server
 
         Raises:
+            DulayniAuthenticationError: If authentication is required but fails
             DulayniConnectionError: If unable to connect to the server
             DulayniTimeoutError: If the request times out
             DulayniClientError: For other API errors
         """
+        # Check authentication
+        if not self.is_authenticated:
+            raise DulayniAuthenticationError(
+                "Authentication required. Call authenticate() or verify_code() first."
+            )
+
         payload = self._build_payload(content, **kwargs)
 
         try:
+            headers = {"Authorization": f"Bearer {self.auth_token}"}
             response = requests.post(
-                self.api_url, json=payload, timeout=self.request_timeout
+                self.api_url,
+                json=payload,
+                headers=headers,
+                timeout=self.request_timeout,
             )
+
+            # Handle authentication errors
+            if response.status_code == 401:
+                self.is_authenticated = False
+                self.auth_token = None
+                raise DulayniAuthenticationError(
+                    "Authentication expired. Please authenticate again."
+                )
+
             response.raise_for_status()
             return response.json()
 
@@ -151,7 +355,11 @@ class DulayniClient:
                 "Request timed out. The query may be taking too long to process."
             )
         except requests.exceptions.RequestException as e:
-            raise DulayniClientError(f"API Error: {str(e)}")
+            if hasattr(e, "response") and e.response and e.response.status_code == 401:
+                # Already handled above
+                pass
+            else:
+                raise DulayniClientError(f"API Error: {str(e)}")
 
     def _build_payload(self, content: str, **kwargs) -> Dict[str, Any]:
         """Build the API payload, only including non-null parameters."""
@@ -171,8 +379,6 @@ class DulayniClient:
             "memory_db",
             "pg_uri",
             "mcp_servers",
-            "startup_timeout",
-            "parallel_tool_calls",
         ]
 
         for field in optional_fields:
@@ -215,13 +421,13 @@ class DulayniClient:
         """Set the agent type."""
         self.agent_type = agent_type
 
-    def set_parallel_tool_calls(self, parallel_tool_calls: Optional[bool]) -> None:
-        """Set the parallel tool calls setting."""
-        self.parallel_tool_calls = parallel_tool_calls
-
-    def set_startup_timeout(self, startup_timeout: Optional[float]) -> None:
-        """Set the startup timeout."""
-        self.startup_timeout = startup_timeout
+    def set_phone_number(self, phone_number: Optional[str]) -> None:
+        """Set the phone number for authentication."""
+        self.phone_number = phone_number
+        # Reset authentication state when phone number changes
+        self.is_authenticated = False
+        self.auth_token = None
+        self.verification_session_id = None
 
     def health_check(self) -> Dict[str, Any]:
         """
@@ -232,7 +438,7 @@ class DulayniClient:
         """
         try:
             # Use the server's health endpoint
-            health_url = self.api_url.replace("/run_agent", "/health")
+            health_url = f"{self.base_url}/health"
             response = requests.get(health_url, timeout=5.0)
             response.raise_for_status()
             return response.json()
@@ -240,7 +446,7 @@ class DulayniClient:
             return {
                 "status": "error",
                 "error": "connection_error",
-                "message": f"Could not connect to dulayni server at {self.api_url}",
+                "message": f"Could not connect to dulayni server at {self.base_url}",
             }
         except requests.exceptions.Timeout:
             return {

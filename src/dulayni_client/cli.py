@@ -11,7 +11,12 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 from .client import DulayniClient
-from .exceptions import DulayniClientError, DulayniConnectionError, DulayniTimeoutError
+from .exceptions import (
+    DulayniClientError,
+    DulayniConnectionError,
+    DulayniTimeoutError,
+    DulayniAuthenticationError,
+)
 from .mcp.start import start_server, stop_server, DEFAULT_PORT
 
 console = Console()
@@ -55,14 +60,6 @@ def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]
         "system_prompt",
         cli_args.get("system_prompt") or agent_config.get("system_prompt"),
     )
-    add_if_not_none(
-        "startup_timeout",
-        cli_args.get("startup_timeout") or agent_config.get("startup_timeout"),
-    )
-    add_if_not_none(
-        "parallel_tool_calls",
-        cli_args.get("parallel_tool_calls") or agent_config.get("parallel_tool_calls"),
-    )
 
     # Memory configuration
     memory_config = config.get("memory", {})
@@ -82,13 +79,13 @@ def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]
     # API configuration
     add_if_not_none("api_url", cli_args.get("api_url") or config.get("api_url"))
 
-    # OpenAI API key handling
-    openai_key = (
-        cli_args.get("openai_api_key")
-        or config.get("openai_api_key")
-        or os.environ.get("OPENAI_API_KEY")
+    # Phone number handling
+    phone_number = (
+        cli_args.get("phone_number")
+        or config.get("phone_number")
+        or os.environ.get("PHONE_NUMBER")
     )
-    add_if_not_none("openai_api_key", openai_key)
+    add_if_not_none("phone_number", phone_number)
 
     # CLI-only arguments
     add_if_not_none("query", cli_args.get("query"))
@@ -107,14 +104,12 @@ def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]
 @click.option(
     "--model", "-m", type=click.Choice(["gpt-4o", "gpt-4o-mini"]), help="Model name"
 )
-@click.option("--openai_api_key", "-k", help="OpenAI API key")
+@click.option(
+    "--phone-number", "-p", required=True, help="Phone number for authentication"
+)
 @click.option("--query", "-q", type=str, help="Query string for batch mode")
 @click.option("--memory_db", help="Path to SQLite database for conversation memory")
 @click.option("--pg_uri", help="PostgreSQL URI for memory storage")
-@click.option("--startup_timeout", "-t", type=float, help="Timeout for server startup")
-@click.option(
-    "--parallel_tool_calls", "-p", is_flag=True, help="Enable parallel tool calls"
-)
 @click.option(
     "--agent_type", "-a", type=click.Choice(["react", "deep_react"]), help="Agent type"
 )
@@ -141,12 +136,19 @@ def main(**cli_args):
         # Merge config with CLI arguments
         merged_config = merge_config_with_args(config, **cli_args)
 
+        # Validate phone number is provided
+        if not merged_config.get("phone_number"):
+            console.print(
+                "[red]Error: Phone number is required. Use --phone-number or set PHONE_NUMBER environment variable[/red]"
+            )
+            raise click.Abort()
+
         try:
             # Create client with only the parameters that were explicitly provided
             client_params = {}
             client_param_mapping = {
                 "api_url": "api_url",
-                "openai_api_key": "openai_api_key",
+                "phone_number": "phone_number",
                 "model": "model",
                 "agent_type": "agent_type",
                 "thread_id": "thread_id",
@@ -154,8 +156,6 @@ def main(**cli_args):
                 "mcp_servers": "mcp_servers",
                 "memory_db": "memory_db",
                 "pg_uri": "pg_uri",
-                "startup_timeout": "startup_timeout",
-                "parallel_tool_calls": "parallel_tool_calls",
             }
 
             for config_key, client_key in client_param_mapping.items():
@@ -163,6 +163,25 @@ def main(**cli_args):
                     client_params[client_key] = merged_config[config_key]
 
             client = DulayniClient(**client_params)
+
+            # Handle authentication
+            def prompt_for_verification_code():
+                return console.input(
+                    "[bold yellow]Enter 4-digit verification code: [/bold yellow]"
+                )
+
+            # Authenticate user
+            console.print(
+                f"[yellow]Requesting verification code for {merged_config['phone_number']}...[/yellow]"
+            )
+            try:
+                client.request_verification_code()
+                code = prompt_for_verification_code()
+                client.verify_code(code)
+                console.print("[green]✓ Authentication successful[/green]")
+            except DulayniAuthenticationError as e:
+                console.print(f"[red]Authentication failed: {str(e)}[/red]")
+                raise click.Abort()
 
         except DulayniClientError as e:
             console.print(f"[red]Configuration Error: {str(e)}[/red]")
@@ -181,6 +200,7 @@ def main(**cli_args):
                 DulayniConnectionError,
                 DulayniTimeoutError,
                 DulayniClientError,
+                DulayniAuthenticationError,
             ) as e:
                 console.print(f"[red]Error: {str(e)}[/red]")
                 raise click.Abort()
@@ -203,6 +223,9 @@ def main(**cli_args):
             )
             console.print(
                 f"[yellow]Thread ID: {merged_config.get('thread_id', 'server default')}[/yellow]"
+            )
+            console.print(
+                f"[yellow]Phone number: {merged_config.get('phone_number', 'not set')}[/yellow]"
             )
             console.print(
                 f"[yellow]Memory: {merged_config.get('memory_db') or merged_config.get('pg_uri') or 'server default'}[/yellow]"
@@ -246,6 +269,7 @@ def main(**cli_args):
                     DulayniConnectionError,
                     DulayniTimeoutError,
                     DulayniClientError,
+                    DulayniAuthenticationError,
                 ) as e:
                     console.print(f"[red]Error: {str(e)}[/red]")
                 except Exception as e:
