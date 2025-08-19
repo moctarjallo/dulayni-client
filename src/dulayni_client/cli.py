@@ -12,7 +12,7 @@ from rich.markdown import Markdown
 
 from .client import DulayniClient
 from .exceptions import DulayniClientError, DulayniConnectionError, DulayniTimeoutError
-from .mcp.start import start_server, DEFAULT_PORT
+from .mcp.start import start_server, stop_server, DEFAULT_PORT
 
 console = Console()
 
@@ -131,120 +131,135 @@ def main(**cli_args):
     """Dulayni CLI Client - Interact with dulayni RAG agents via API"""
 
     # Start MCP filesystem server in background
-    start_server(port=DEFAULT_PORT)
-
-    # Load configuration file
-    config_path = cli_args.pop("config")
-    config = load_config(config_path)
-
-    # Merge config with CLI arguments
-    merged_config = merge_config_with_args(config, **cli_args)
+    proc = start_server(port=DEFAULT_PORT)
 
     try:
-        # Create client with only the parameters that were explicitly provided
-        client_params = {}
-        client_param_mapping = {
-            "api_url": "api_url",
-            "openai_api_key": "openai_api_key",
-            "model": "model",
-            "agent_type": "agent_type",
-            "thread_id": "thread_id",
-            "system_prompt": "system_prompt",
-            "mcp_servers": "mcp_servers",
-            "memory_db": "memory_db",
-            "pg_uri": "pg_uri",
-            "startup_timeout": "startup_timeout",
-            "parallel_tool_calls": "parallel_tool_calls",
-        }
+        # Load configuration file
+        config_path = cli_args.pop("config")
+        config = load_config(config_path)
 
-        for config_key, client_key in client_param_mapping.items():
-            if config_key in merged_config:
-                client_params[client_key] = merged_config[config_key]
+        # Merge config with CLI arguments
+        merged_config = merge_config_with_args(config, **cli_args)
 
-        client = DulayniClient(**client_params)
-
-    except DulayniClientError as e:
-        console.print(f"[red]Configuration Error: {str(e)}[/red]")
-        raise click.Abort()
-
-    if merged_config.get("query"):
-        # Batch mode
         try:
-            if merged_config.get("print_mode") == "json":
-                result = client.query_json(merged_config["query"])
-                print(json.dumps(result, indent=2))
-            else:
-                result = client.query(merged_config["query"])
-                console.print(Markdown(result))
-        except (DulayniConnectionError, DulayniTimeoutError, DulayniClientError) as e:
-            console.print(f"[red]Error: {str(e)}[/red]")
+            # Create client with only the parameters that were explicitly provided
+            client_params = {}
+            client_param_mapping = {
+                "api_url": "api_url",
+                "openai_api_key": "openai_api_key",
+                "model": "model",
+                "agent_type": "agent_type",
+                "thread_id": "thread_id",
+                "system_prompt": "system_prompt",
+                "mcp_servers": "mcp_servers",
+                "memory_db": "memory_db",
+                "pg_uri": "pg_uri",
+                "startup_timeout": "startup_timeout",
+                "parallel_tool_calls": "parallel_tool_calls",
+            }
+
+            for config_key, client_key in client_param_mapping.items():
+                if config_key in merged_config:
+                    client_params[client_key] = merged_config[config_key]
+
+            client = DulayniClient(**client_params)
+
+        except DulayniClientError as e:
+            console.print(f"[red]Configuration Error: {str(e)}[/red]")
             raise click.Abort()
-    else:
-        # Interactive mode
-        console.print(
-            "[bold green]Dulayni Client - Interactive mode. Type 'q' to quit.[/bold green]"
-        )
 
-        # Print configuration info
-        console.print(f"[yellow]Config file: {config_path}[/yellow]")
-        console.print(
-            f"[yellow]API endpoint: {merged_config.get('api_url', 'server default')}[/yellow]"
-        )
-        console.print(
-            f"[yellow]Agent type: {merged_config.get('agent_type', 'server default')}[/yellow]"
-        )
-        console.print(
-            f"[yellow]Model: {merged_config.get('model', 'server default')}[/yellow]"
-        )
-        console.print(
-            f"[yellow]Thread ID: {merged_config.get('thread_id', 'server default')}[/yellow]"
-        )
-        console.print(
-            f"[yellow]Memory: {merged_config.get('memory_db') or merged_config.get('pg_uri') or 'server default'}[/yellow]"
-        )
-        console.print(
-            f"[yellow]MCP servers: {len(merged_config.get('mcp_servers', {})) if 'mcp_servers' in merged_config else 'server default'} configured[/yellow]"
-        )
-
-        # Health check
-        console.print("[yellow]Checking server connection...[/yellow]")
-        health_status = client.health_check()
-        if health_status.get("status") != "healthy":
-            console.print(
-                f"[red]Warning: Server health check failed - {health_status.get('message', 'Unknown error')}[/red]"
-            )
-            if health_status.get("error") == "connection_error":
-                console.print(
-                    "[red]Make sure the dulayni server is running and accessible.[/red]"
-                )
-        else:
-            console.print("[green]✓ Server connection OK[/green]")
-            debug_tools = health_status.get("debug_tools")
-            if debug_tools is not None:
-                console.print(f"[cyan]Debug tools enabled: {debug_tools}[/cyan]")
-
-        while True:
+        if merged_config.get("query"):
+            # Batch mode
             try:
-                user_input = console.input("[bold blue]> [/bold blue]")
-                if user_input.strip().lower() == "q":
-                    break
-                if not user_input.strip():
-                    continue
-
-                result = client.query(user_input)
-                console.print(Markdown(result))
-
-            except KeyboardInterrupt:
-                console.print("\n[yellow]Goodbye![/yellow]")
-                break
+                if merged_config.get("print_mode") == "json":
+                    result = client.query_json(merged_config["query"])
+                    print(json.dumps(result, indent=2))
+                else:
+                    result = client.query(merged_config["query"])
+                    console.print(Markdown(result))
             except (
                 DulayniConnectionError,
                 DulayniTimeoutError,
                 DulayniClientError,
             ) as e:
                 console.print(f"[red]Error: {str(e)}[/red]")
-            except Exception as e:
-                console.print(f"[red]Unexpected error: {str(e)}[/red]")
+                raise click.Abort()
+        else:
+            # Interactive mode
+            console.print(
+                "[bold green]Dulayni Client - Interactive mode. Type 'q' to quit.[/bold green]"
+            )
+
+            # Print configuration info
+            console.print(f"[yellow]Config file: {config_path}[/yellow]")
+            console.print(
+                f"[yellow]API endpoint: {merged_config.get('api_url', 'server default')}[/yellow]"
+            )
+            console.print(
+                f"[yellow]Agent type: {merged_config.get('agent_type', 'server default')}[/yellow]"
+            )
+            console.print(
+                f"[yellow]Model: {merged_config.get('model', 'server default')}[/yellow]"
+            )
+            console.print(
+                f"[yellow]Thread ID: {merged_config.get('thread_id', 'server default')}[/yellow]"
+            )
+            console.print(
+                f"[yellow]Memory: {merged_config.get('memory_db') or merged_config.get('pg_uri') or 'server default'}[/yellow]"
+            )
+            console.print(
+                f"[yellow]MCP servers: {len(merged_config.get('mcp_servers', {})) if 'mcp_servers' in merged_config else 'server default'} configured[/yellow]"
+            )
+
+            # Health check
+            console.print("[yellow]Checking server connection...[/yellow]")
+            health_status = client.health_check()
+            if health_status.get("status") != "healthy":
+                console.print(
+                    f"[red]Warning: Server health check failed - {health_status.get('message', 'Unknown error')}[/red]"
+                )
+                if health_status.get("error") == "connection_error":
+                    console.print(
+                        "[red]Make sure the dulayni server is running and accessible.[/red]"
+                    )
+            else:
+                console.print("[green]✓ Server connection OK[/green]")
+                debug_tools = health_status.get("debug_tools")
+                if debug_tools is not None:
+                    console.print(f"[cyan]Debug tools enabled: {debug_tools}[/cyan]")
+
+            while True:
+                try:
+                    user_input = console.input("[bold blue]> [/bold blue]")
+                    if user_input.strip().lower() == "q":
+                        break
+                    if not user_input.strip():
+                        continue
+
+                    result = client.query(user_input)
+                    console.print(Markdown(result))
+
+                except KeyboardInterrupt:
+                    console.print("\n[yellow]Goodbye![/yellow]")
+                    break
+                except (
+                    DulayniConnectionError,
+                    DulayniTimeoutError,
+                    DulayniClientError,
+                ) as e:
+                    console.print(f"[red]Error: {str(e)}[/red]")
+                except Exception as e:
+                    console.print(f"[red]Unexpected error: {str(e)}[/red]")
+
+    finally:
+        # Always try to stop the MCP server gracefully
+        stop_server(port=DEFAULT_PORT)
+
+        # Fallback: kill process if still alive
+        if proc and proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=2)
+            console.print("[yellow]MCP filesystem server process terminated[/yellow]")
 
 
 if __name__ == "__main__":
