@@ -5,31 +5,33 @@ A Model Context Protocol server providing secure filesystem operations.
 Integrated into the dulayni-client project.
 """
 
-import os
-import sys
-import json
-import asyncio
-import shutil
-import stat
-import tempfile
-import hashlib
-from pathlib import Path
-from typing import List, Dict, Any, Optional, Union, Tuple
-from datetime import datetime
-import fnmatch
-import difflib
-import base64
-import mimetypes
-from dataclasses import dataclass
 import argparse
+import asyncio
+import base64
+import difflib
+import fnmatch
+import json
+import mimetypes
+import os
+import shlex
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
-from fastmcp import FastMCP
 import aiofiles
 import aiofiles.os
+import psutil
+from fastmcp import FastMCP
+
 
 @dataclass
 class FileInfo:
     """File metadata information."""
+
     size: int
     created: datetime
     modified: datetime
@@ -38,52 +40,53 @@ class FileInfo:
     is_file: bool
     permissions: str
 
+
 class PathValidator:
     """Handles path validation and security checks."""
-    
+
     def __init__(self, allowed_directories: List[str]):
         self.allowed_directories = [Path(d).resolve() for d in allowed_directories]
-    
+
     def update_allowed_directories(self, directories: List[str]):
         """Update the list of allowed directories."""
         self.allowed_directories = [Path(d).resolve() for d in directories]
-    
+
     def expand_home(self, filepath: str) -> str:
         """Expand home directory tildes in paths."""
-        if filepath.startswith('~/') or filepath == '~':
+        if filepath.startswith("~/") or filepath == "~":
             return str(Path.home() / filepath[1:])
         return filepath
-    
+
     async def validate_path(self, requested_path: str) -> Path:
         """
         Validate and resolve a path, ensuring it's within allowed directories.
-        
+
         Args:
             requested_path: The path to validate
-            
+
         Returns:
             Resolved Path object
-            
+
         Raises:
             PermissionError: If path is outside allowed directories
             FileNotFoundError: If parent directory doesn't exist (for new files)
         """
         expanded_path = self.expand_home(requested_path)
         absolute_path = Path(expanded_path).resolve()
-        
+
         # Check if path is within allowed directories
         is_allowed = any(
             str(absolute_path).startswith(str(allowed_dir))
             for allowed_dir in self.allowed_directories
         )
-        
+
         if not is_allowed:
-            allowed_dirs_str = ', '.join(str(d) for d in self.allowed_directories)
+            allowed_dirs_str = ", ".join(str(d) for d in self.allowed_directories)
             raise PermissionError(
                 f"Access denied - path outside allowed directories: "
                 f"{absolute_path} not in {allowed_dirs_str}"
             )
-        
+
         # For new files, verify parent directory exists and is allowed
         if not absolute_path.exists():
             parent_dir = absolute_path.parent.resolve()
@@ -91,35 +94,337 @@ class PathValidator:
                 str(parent_dir).startswith(str(allowed_dir))
                 for allowed_dir in self.allowed_directories
             )
-            
+
             if not parent_is_allowed:
-                allowed_dirs_str = ', '.join(str(d) for d in self.allowed_directories)
+                allowed_dirs_str = ", ".join(str(d) for d in self.allowed_directories)
                 raise PermissionError(
                     f"Access denied - parent directory outside allowed directories: "
                     f"{parent_dir} not in {allowed_dirs_str}"
                 )
-            
+
             if not parent_dir.exists():
-                raise FileNotFoundError(f"Parent directory does not exist: {parent_dir}")
-        
+                raise FileNotFoundError(
+                    f"Parent directory does not exist: {parent_dir}"
+                )
+
         return absolute_path
+
+
+class CommandExecutor:
+    """Handles secure command execution with validation and safety measures."""
+
+    def __init__(self, allowed_directories: List[str], timeout: int = 30):
+        self.allowed_directories = [Path(d).resolve() for d in allowed_directories]
+        self.timeout = timeout
+        self.blocked_commands = {
+            # Destructive commands
+            "rm",
+            "rmdir",
+            "del",
+            "format",
+            "fdisk",
+            "mkfs",
+            # System modification
+            "sudo",
+            "su",
+            "passwd",
+            "usermod",
+            "useradd",
+            "userdel",
+            "chmod",
+            "chown",
+            "chgrp",
+            # Network/security sensitive
+            "ssh",
+            "scp",
+            "rsync",
+            "curl",
+            "wget",
+            "nc",
+            "netcat",
+            # Process manipulation
+            "kill",
+            "killall",
+            "pkill",
+            # System control
+            "reboot",
+            "shutdown",
+            "halt",
+            "systemctl",
+            "service",
+            # Package management (potentially dangerous)
+            ## Uncomment this if needed
+            # "apt-get",
+            # "yum",
+            # "dnf",
+            # "pacman",
+            # "brew",
+            # "pip",
+            # "npm",
+        }
+
+    def validate_command(self, command: str) -> None:
+        """Validate command for security before execution."""
+        if not command.strip():
+            raise ValueError("Command cannot be empty")
+
+        # Parse command to get the base command
+        try:
+            parts = shlex.split(command)
+            if not parts:
+                raise ValueError("Invalid command format")
+
+            base_command = os.path.basename(parts[0])
+
+            # Check against blocked commands
+            if base_command.lower() in self.blocked_commands:
+                raise PermissionError(
+                    f"Command '{base_command}' is not allowed for security reasons"
+                )
+
+            # Check for dangerous patterns
+            dangerous_patterns = [
+                ">",
+                ">>",
+                "|",
+                "&&",
+                "||",
+                ";",
+                "`",
+                "$(",
+                "$()",
+                "eval",
+            ]
+            for pattern in dangerous_patterns:
+                if pattern in command:
+                    raise PermissionError(
+                        f"Command contains potentially dangerous pattern: '{pattern}'"
+                    )
+
+        except ValueError as e:
+            raise ValueError(f"Invalid command syntax: {e}")
+
+    def validate_working_directory(self, working_dir: Optional[str]) -> Path:
+        """Validate and resolve working directory."""
+        if working_dir is None:
+            # Default to first allowed directory
+            return self.allowed_directories[0]
+
+        working_path = Path(working_dir).resolve()
+
+        # Check if working directory is within allowed directories
+        is_allowed = any(
+            str(working_path).startswith(str(allowed_dir))
+            for allowed_dir in self.allowed_directories
+        )
+
+        if not is_allowed:
+            allowed_dirs_str = ", ".join(str(d) for d in self.allowed_directories)
+            raise PermissionError(
+                f"Working directory outside allowed directories: "
+                f"{working_path} not in {allowed_dirs_str}"
+            )
+
+        if not working_path.exists():
+            raise FileNotFoundError(f"Working directory does not exist: {working_path}")
+
+        if not working_path.is_dir():
+            raise NotADirectoryError(
+                f"Working directory is not a directory: {working_path}"
+            )
+
+        return working_path
+
+    async def execute(
+        self,
+        command: str,
+        working_dir: Optional[str] = None,
+        env_vars: Optional[Dict[str, str]] = None,
+        capture_output: bool = True,
+        timeout: Optional[int] = None,
+        monitor_resources: bool = True,
+    ) -> Dict[str, Any]:
+        """Execute a command safely and return results with optional resource monitoring."""
+
+        # Validate inputs
+        self.validate_command(command)
+        validated_working_dir = self.validate_working_directory(working_dir)
+
+        # Prepare environment
+        env = os.environ.copy()
+        if env_vars:
+            env.update(env_vars)
+
+        # Use provided timeout or default
+        exec_timeout = timeout if timeout is not None else self.timeout
+
+        start_time = time.time()
+        max_memory_mb = 0
+        max_cpu_percent = 0
+
+        try:
+            # Execute command
+            process = await asyncio.create_subprocess_shell(
+                command,
+                cwd=str(validated_working_dir),
+                env=env,
+                stdout=subprocess.PIPE if capture_output else None,
+                stderr=subprocess.PIPE if capture_output else None,
+                shell=True,
+            )
+
+            # Monitor resources if requested
+            psutil_process = None
+            if monitor_resources and process.pid:
+                try:
+                    psutil_process = psutil.Process(process.pid)
+                except psutil.NoSuchProcess:
+                    pass
+
+            # Create monitoring task if needed
+            monitor_task = None
+            if psutil_process and monitor_resources:
+
+                async def monitor():
+                    nonlocal max_memory_mb, max_cpu_percent
+                    while process.returncode is None:
+                        try:
+                            # Get memory usage in MB
+                            memory_info = psutil_process.memory_info()
+                            memory_mb = memory_info.rss / 1024 / 1024
+                            max_memory_mb = max(max_memory_mb, memory_mb)
+
+                            # Get CPU usage
+                            cpu_percent = psutil_process.cpu_percent()
+                            max_cpu_percent = max(max_cpu_percent, cpu_percent)
+
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            break
+
+                        await asyncio.sleep(0.1)  # Check every 100ms
+
+                monitor_task = asyncio.create_task(monitor())
+
+            # Wait for completion with timeout
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=exec_timeout
+            )
+
+            # Cancel monitoring task
+            if monitor_task:
+                monitor_task.cancel()
+                try:
+                    await monitor_task
+                except asyncio.CancelledError:
+                    pass
+
+            execution_time = time.time() - start_time
+
+            # Decode output
+            stdout_text = stdout.decode("utf-8", errors="replace") if stdout else ""
+            stderr_text = stderr.decode("utf-8", errors="replace") if stderr else ""
+
+            result = {
+                "command": command,
+                "working_directory": str(validated_working_dir),
+                "return_code": process.returncode,
+                "stdout": stdout_text,
+                "stderr": stderr_text,
+                "success": process.returncode == 0,
+                "timed_out": False,
+                "execution_time_seconds": round(execution_time, 3),
+            }
+
+            # Add resource monitoring results if available
+            if monitor_resources:
+                result.update(
+                    {
+                        "max_memory_mb": round(max_memory_mb, 2),
+                        "max_cpu_percent": round(max_cpu_percent, 2),
+                    }
+                )
+
+            return result
+
+        except asyncio.TimeoutError:
+            # Kill the process if it's still running
+            if process.returncode is None:
+                try:
+                    # Try graceful termination first
+                    if psutil_process:
+                        psutil_process.terminate()
+                        await asyncio.sleep(1)
+                        if psutil_process.is_running():
+                            psutil_process.kill()
+                    else:
+                        process.terminate()
+
+                    await process.wait()
+                except (psutil.NoSuchProcess, ProcessLookupError):
+                    pass
+
+            execution_time = time.time() - start_time
+
+            result = {
+                "command": command,
+                "working_directory": str(validated_working_dir),
+                "return_code": -1,
+                "stdout": "",
+                "stderr": f"Command timed out after {exec_timeout} seconds",
+                "success": False,
+                "timed_out": True,
+                "execution_time_seconds": round(execution_time, 3),
+            }
+
+            if monitor_resources:
+                result.update(
+                    {
+                        "max_memory_mb": round(max_memory_mb, 2),
+                        "max_cpu_percent": round(max_cpu_percent, 2),
+                    }
+                )
+
+            return result
+
+        except Exception as e:
+            execution_time = time.time() - start_time
+
+            result = {
+                "command": command,
+                "working_directory": str(validated_working_dir),
+                "return_code": -1,
+                "stdout": "",
+                "stderr": f"Execution error: {str(e)}",
+                "success": False,
+                "timed_out": False,
+                "execution_time_seconds": round(execution_time, 3),
+            }
+
+            if monitor_resources:
+                result.update(
+                    {
+                        "max_memory_mb": round(max_memory_mb, 2),
+                        "max_cpu_percent": round(max_cpu_percent, 2),
+                    }
+                )
+
+            return result
+
 
 class DulayniFileSystemMCP:
     """MCP server for filesystem operations integrated with dulayni-client."""
-    
+
     def __init__(self, allowed_directories: List[str]):
         self.path_validator = PathValidator(allowed_directories)
         self.mcp = FastMCP("dulayni-filesystem")
         self._setup_tools()
-    
+
     def _setup_tools(self):
         """Register all MCP tools."""
-        
+
         @self.mcp.tool()
         async def read_text_file(
-            path: str,
-            head: Optional[int] = None,
-            tail: Optional[int] = None
+            path: str, head: Optional[int] = None, tail: Optional[int] = None
         ) -> str:
             """
             Read the complete contents of a file from the file system as text.
@@ -131,18 +436,20 @@ class DulayniFileSystemMCP:
             Only works within allowed directories.
             """
             if head is not None and tail is not None:
-                raise ValueError("Cannot specify both head and tail parameters simultaneously")
-            
+                raise ValueError(
+                    "Cannot specify both head and tail parameters simultaneously"
+                )
+
             validated_path = await self.path_validator.validate_path(path)
-            
+
             if tail is not None:
                 return await self._tail_file(validated_path, tail)
             elif head is not None:
                 return await self._head_file(validated_path, head)
             else:
-                async with aiofiles.open(validated_path, 'r', encoding='utf-8') as f:
+                async with aiofiles.open(validated_path, "r", encoding="utf-8") as f:
                     return await f.read()
-        
+
         @self.mcp.tool()
         async def read_media_file(path: str) -> Dict[str, Any]:
             """
@@ -150,18 +457,18 @@ class DulayniFileSystemMCP:
             Only works within allowed directories.
             """
             validated_path = await self.path_validator.validate_path(path)
-            
+
             # Determine MIME type
             mime_type, _ = mimetypes.guess_type(str(validated_path))
             if not mime_type:
                 mime_type = "application/octet-stream"
-            
+
             # Read file as binary and encode to base64
-            async with aiofiles.open(validated_path, 'rb') as f:
+            async with aiofiles.open(validated_path, "rb") as f:
                 content = await f.read()
-            
-            data = base64.b64encode(content).decode('utf-8')
-            
+
+            data = base64.b64encode(content).decode("utf-8")
+
             # Determine content type for MCP
             if mime_type.startswith("image/"):
                 content_type = "image"
@@ -169,13 +476,9 @@ class DulayniFileSystemMCP:
                 content_type = "audio"
             else:
                 content_type = "blob"
-            
-            return {
-                "type": content_type,
-                "data": data,
-                "mimeType": mime_type
-            }
-        
+
+            return {"type": content_type, "data": data, "mimeType": mime_type}
+
         @self.mcp.tool()
         async def read_multiple_files(paths: List[str]) -> str:
             """
@@ -186,18 +489,20 @@ class DulayniFileSystemMCP:
             the entire operation. Only works within allowed directories.
             """
             results = []
-            
+
             for file_path in paths:
                 try:
                     validated_path = await self.path_validator.validate_path(file_path)
-                    async with aiofiles.open(validated_path, 'r', encoding='utf-8') as f:
+                    async with aiofiles.open(
+                        validated_path, "r", encoding="utf-8"
+                    ) as f:
                         content = await f.read()
                     results.append(f"{file_path}:\n{content}\n")
                 except Exception as e:
                     results.append(f"{file_path}: Error - {str(e)}")
-            
+
             return "\n---\n".join(results)
-        
+
         @self.mcp.tool()
         async def write_file(path: str, content: str) -> str:
             """
@@ -206,29 +511,27 @@ class DulayniFileSystemMCP:
             Handles text content with proper encoding. Only works within allowed directories.
             """
             validated_path = await self.path_validator.validate_path(path)
-            
+
             # Use atomic write via temporary file for safety
-            temp_path = validated_path.with_suffix(validated_path.suffix + '.tmp')
-            
+            temp_path = validated_path.with_suffix(validated_path.suffix + ".tmp")
+
             try:
-                async with aiofiles.open(temp_path, 'w', encoding='utf-8') as f:
+                async with aiofiles.open(temp_path, "w", encoding="utf-8") as f:
                     await f.write(content)
-                
+
                 # Atomic rename
                 await aiofiles.os.rename(temp_path, validated_path)
-                
+
                 return f"Successfully wrote to {path}"
             except Exception as e:
                 # Cleanup temp file on error
                 if temp_path.exists():
                     await aiofiles.os.remove(temp_path)
                 raise e
-        
+
         @self.mcp.tool()
         async def edit_file(
-            path: str,
-            edits: List[Dict[str, str]],
-            dry_run: bool = False
+            path: str, edits: List[Dict[str, str]], dry_run: bool = False
         ) -> str:
             """
             Make line-based edits to a text file. Each edit replaces exact line sequences
@@ -238,7 +541,7 @@ class DulayniFileSystemMCP:
             validated_path = await self.path_validator.validate_path(path)
             result = await self._apply_file_edits(validated_path, edits, dry_run)
             return result
-        
+
         @self.mcp.tool()
         async def create_directory(path: str) -> str:
             """
@@ -250,7 +553,7 @@ class DulayniFileSystemMCP:
             validated_path = await self.path_validator.validate_path(path)
             validated_path.mkdir(parents=True, exist_ok=True)
             return f"Successfully created directory {path}"
-        
+
         @self.mcp.tool()
         async def list_directory(path: str) -> str:
             """
@@ -260,22 +563,19 @@ class DulayniFileSystemMCP:
             finding specific files within a directory. Only works within allowed directories.
             """
             validated_path = await self.path_validator.validate_path(path)
-            
+
             if not validated_path.is_dir():
                 raise NotADirectoryError(f"{path} is not a directory")
-            
+
             entries = []
             for entry in validated_path.iterdir():
                 prefix = "[DIR]" if entry.is_dir() else "[FILE]"
                 entries.append(f"{prefix} {entry.name}")
-            
+
             return "\n".join(sorted(entries))
-        
+
         @self.mcp.tool()
-        async def list_directory_with_sizes(
-            path: str,
-            sort_by: str = "name"
-        ) -> str:
+        async def list_directory_with_sizes(path: str, sort_by: str = "name") -> str:
             """
             Get a detailed listing of all files and directories in a specified path, including sizes.
             Results clearly distinguish between files and directories with [FILE] and [DIR]
@@ -283,59 +583,65 @@ class DulayniFileSystemMCP:
             finding specific files within a directory. Only works within allowed directories.
             """
             validated_path = await self.path_validator.validate_path(path)
-            
+
             if not validated_path.is_dir():
                 raise NotADirectoryError(f"{path} is not a directory")
-            
+
             entries = []
             total_size = 0
             file_count = 0
             dir_count = 0
-            
+
             for entry in validated_path.iterdir():
                 try:
                     stat_result = entry.stat()
                     size = stat_result.st_size if entry.is_file() else 0
-                    
+
                     if entry.is_file():
                         file_count += 1
                         total_size += size
                     else:
                         dir_count += 1
-                    
-                    entries.append({
-                        'name': entry.name,
-                        'is_dir': entry.is_dir(),
-                        'size': size,
-                        'mtime': stat_result.st_mtime
-                    })
+
+                    entries.append(
+                        {
+                            "name": entry.name,
+                            "is_dir": entry.is_dir(),
+                            "size": size,
+                            "mtime": stat_result.st_mtime,
+                        }
+                    )
                 except OSError:
                     # Skip entries we can't stat
                     continue
-            
+
             # Sort entries
             if sort_by == "size":
-                entries.sort(key=lambda x: x['size'], reverse=True)
+                entries.sort(key=lambda x: x["size"], reverse=True)
             else:
-                entries.sort(key=lambda x: x['name'])
-            
+                entries.sort(key=lambda x: x["name"])
+
             # Format output
             lines = []
             for entry in entries:
-                prefix = "[DIR]" if entry['is_dir'] else "[FILE]"
-                name = entry['name'].ljust(30)
-                size_str = self._format_size(entry['size']) if not entry['is_dir'] else ""
+                prefix = "[DIR]" if entry["is_dir"] else "[FILE]"
+                name = entry["name"].ljust(30)
+                size_str = (
+                    self._format_size(entry["size"]) if not entry["is_dir"] else ""
+                )
                 lines.append(f"{prefix} {name} {size_str.rjust(10)}")
-            
+
             # Add summary
-            lines.extend([
-                "",
-                f"Total: {file_count} files, {dir_count} directories",
-                f"Combined size: {self._format_size(total_size)}"
-            ])
-            
+            lines.extend(
+                [
+                    "",
+                    f"Total: {file_count} files, {dir_count} directories",
+                    f"Combined size: {self._format_size(total_size)}",
+                ]
+            )
+
             return "\n".join(lines)
-        
+
         @self.mcp.tool()
         async def directory_tree(path: str) -> str:
             """
@@ -347,7 +653,7 @@ class DulayniFileSystemMCP:
             validated_path = await self.path_validator.validate_path(path)
             tree = await self._build_directory_tree(validated_path)
             return json.dumps(tree, indent=2)
-        
+
         @self.mcp.tool()
         async def move_file(source: str, destination: str) -> str:
             """
@@ -358,18 +664,16 @@ class DulayniFileSystemMCP:
             """
             validated_source = await self.path_validator.validate_path(source)
             validated_dest = await self.path_validator.validate_path(destination)
-            
+
             if validated_dest.exists():
                 raise FileExistsError(f"Destination already exists: {destination}")
-            
+
             await aiofiles.os.rename(validated_source, validated_dest)
             return f"Successfully moved {source} to {destination}"
-        
+
         @self.mcp.tool()
         async def search_files(
-            path: str,
-            pattern: str,
-            exclude_patterns: List[str] = None
+            path: str, pattern: str, exclude_patterns: List[str] = None
         ) -> str:
             """
             Recursively search for files and directories matching a pattern.
@@ -380,14 +684,14 @@ class DulayniFileSystemMCP:
             """
             if exclude_patterns is None:
                 exclude_patterns = []
-            
+
             validated_path = await self.path_validator.validate_path(path)
             results = await self._search_files_recursive(
                 validated_path, pattern, exclude_patterns
             )
-            
+
             return "\n".join(results) if results else "No matches found"
-        
+
         @self.mcp.tool()
         async def get_file_info(path: str) -> str:
             """
@@ -398,9 +702,9 @@ class DulayniFileSystemMCP:
             """
             validated_path = await self.path_validator.validate_path(path)
             info = await self._get_file_stats(validated_path)
-            
+
             return "\n".join(f"{key}: {value}" for key, value in info.items())
-        
+
         @self.mcp.tool()
         async def list_allowed_directories() -> str:
             """
@@ -409,280 +713,359 @@ class DulayniFileSystemMCP:
             """
             directories = [str(d) for d in self.path_validator.allowed_directories]
             return f"Allowed directories:\n" + "\n".join(directories)
-    
+
+        @self.mcp.tool()
+        async def execute_command(
+            command: str,
+            working_directory: Optional[str] = None,
+            environment_variables: Optional[Dict[str, str]] = None,
+            timeout_seconds: Optional[int] = None,
+            capture_output: bool = True,
+            monitor_resources: bool = True,
+        ) -> str:
+            """
+            Execute a system command safely within allowed directories. This tool provides
+            secure command execution with built-in safety measures including command validation,
+            timeout protection, directory restrictions, and resource monitoring. Blocked commands
+            include potentially destructive operations (rm, format), system modifications (sudo, chmod),
+            and network operations (ssh, curl). Only works within allowed directories.
+
+            Args:
+                command: The command to execute (shell command string)
+                working_directory: Directory to execute command in (must be within allowed directories)
+                environment_variables: Additional environment variables to set
+                timeout_seconds: Maximum execution time in seconds (default: 30)
+                capture_output: Whether to capture and return stdout/stderr (default: True)
+                monitor_resources: Whether to monitor CPU and memory usage (default: True)
+
+            Returns:
+                Formatted execution results including return code, output, execution time, and resource usage
+            """
+            if not hasattr(self, "command_executor"):
+                self.command_executor = CommandExecutor(
+                    [str(d) for d in self.path_validator.allowed_directories]
+                )
+
+            result = await self.command_executor.execute(
+                command=command,
+                working_dir=working_directory,
+                env_vars=environment_variables,
+                timeout=timeout_seconds,
+                capture_output=capture_output,
+                monitor_resources=monitor_resources,
+            )
+
+            # Format output
+            output_lines = [
+                f"Command: {result['command']}",
+                f"Working Directory: {result['working_directory']}",
+                f"Return Code: {result['return_code']}",
+                f"Success: {result['success']}",
+                f"Execution Time: {result['execution_time_seconds']}s",
+            ]
+
+            if result["timed_out"]:
+                output_lines.append("Status: TIMED OUT")
+
+            # Add resource monitoring info if available
+            if monitor_resources and "max_memory_mb" in result:
+                output_lines.extend(
+                    [
+                        f"Peak Memory Usage: {result['max_memory_mb']} MB",
+                        f"Peak CPU Usage: {result['max_cpu_percent']}%",
+                    ]
+                )
+
+            if result["stdout"]:
+                output_lines.extend(["", "=== STDOUT ===", result["stdout"]])
+
+            if result["stderr"]:
+                output_lines.extend(["", "=== STDERR ===", result["stderr"]])
+
+            return "\n".join(output_lines)
+
     async def _tail_file(self, file_path: Path, num_lines: int) -> str:
         """Get the last N lines of a file efficiently."""
         chunk_size = 1024
         lines = []
-        
-        async with aiofiles.open(file_path, 'rb') as f:
+
+        async with aiofiles.open(file_path, "rb") as f:
             # Get file size
             await f.seek(0, 2)  # Seek to end
             file_size = await f.tell()
-            
+
             if file_size == 0:
                 return ""
-            
+
             position = file_size
             remaining_text = b""
-            
+
             while position > 0 and len(lines) < num_lines:
                 # Read chunk from current position backwards
                 read_size = min(chunk_size, position)
                 position -= read_size
-                
+
                 await f.seek(position)
                 chunk = await f.read(read_size)
-                
+
                 # Combine with remaining text from previous iteration
                 chunk_text = chunk + remaining_text
-                text = chunk_text.decode('utf-8', errors='replace')
-                
+                text = chunk_text.decode("utf-8", errors="replace")
+
                 # Split by newlines
-                chunk_lines = text.split('\n')
-                
+                chunk_lines = text.split("\n")
+
                 # If not at start of file, first line might be incomplete
                 if position > 0:
-                    remaining_text = chunk_lines[0].encode('utf-8')
+                    remaining_text = chunk_lines[0].encode("utf-8")
                     chunk_lines = chunk_lines[1:]
-                
+
                 # Add lines to result (up to the number we need)
                 for i in range(len(chunk_lines) - 1, -1, -1):
                     if len(lines) >= num_lines:
                         break
                     lines.insert(0, chunk_lines[i])
-        
-        return '\n'.join(lines)
-    
+
+        return "\n".join(lines)
+
     async def _head_file(self, file_path: Path, num_lines: int) -> str:
         """Get the first N lines of a file efficiently."""
         lines = []
-        
-        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+
+        async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
             async for line in f:
-                lines.append(line.rstrip('\n\r'))
+                lines.append(line.rstrip("\n\r"))
                 if len(lines) >= num_lines:
                     break
-        
-        return '\n'.join(lines)
-    
+
+        return "\n".join(lines)
+
     async def _apply_file_edits(
-        self,
-        file_path: Path,
-        edits: List[Dict[str, str]],
-        dry_run: bool = False
+        self, file_path: Path, edits: List[Dict[str, str]], dry_run: bool = False
     ) -> str:
         """Apply edits to a file and return diff."""
-        async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+        async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
             original_content = await f.read()
-        
+
         modified_content = original_content
-        
+
         # Apply edits sequentially
         for edit in edits:
-            old_text = edit.get('oldText', '')
-            new_text = edit.get('newText', '')
-            
+            old_text = edit.get("oldText", "")
+            new_text = edit.get("newText", "")
+
             if old_text in modified_content:
                 modified_content = modified_content.replace(old_text, new_text, 1)
             else:
                 # Try line-by-line matching with whitespace flexibility
-                result = self._apply_flexible_edit(modified_content, old_text, new_text, apply=True)
+                result = self._apply_flexible_edit(
+                    modified_content, old_text, new_text, apply=True
+                )
                 if result == modified_content:  # No change means no match found
-                    raise ValueError(f"Could not find exact match for edit:\n{old_text}")
+                    raise ValueError(
+                        f"Could not find exact match for edit:\n{old_text}"
+                    )
                 modified_content = result
-        
+
         # Create unified diff
-        diff = self._create_unified_diff(original_content, modified_content, str(file_path))
-        
+        diff = self._create_unified_diff(
+            original_content, modified_content, str(file_path)
+        )
+
         # Write changes if not dry run
         if not dry_run:
             await self.write_file(str(file_path), modified_content)
-        
+
         return diff
-    
-    def _apply_flexible_edit(self, content: str, old_text: str, new_text: str, apply: bool = False) -> Union[bool, str]:
+
+    def _apply_flexible_edit(
+        self, content: str, old_text: str, new_text: str, apply: bool = False
+    ) -> Union[bool, str]:
         """Apply edit with flexible whitespace matching."""
-        old_lines = old_text.split('\n')
-        content_lines = content.split('\n')
-        
+        old_lines = old_text.split("\n")
+        content_lines = content.split("\n")
+
         for i in range(len(content_lines) - len(old_lines) + 1):
-            potential_match = content_lines[i:i + len(old_lines)]
-            
+            potential_match = content_lines[i : i + len(old_lines)]
+
             # Compare with normalized whitespace
             is_match = all(
                 old_line.strip() == content_line.strip()
                 for old_line, content_line in zip(old_lines, potential_match)
             )
-            
+
             if is_match:
                 if not apply:
                     return True
-                
+
                 # Apply the edit preserving indentation
-                new_lines = new_text.split('\n')
+                new_lines = new_text.split("\n")
                 if new_lines and content_lines[i]:
                     # Preserve original indentation
-                    original_indent = len(content_lines[i]) - len(content_lines[i].lstrip())
-                    indent = ' ' * original_indent
-                    new_lines = [indent + line.lstrip() if j == 0 else line 
-                               for j, line in enumerate(new_lines)]
-                
-                content_lines[i:i + len(old_lines)] = new_lines
-                return '\n'.join(content_lines)
-        
+                    original_indent = len(content_lines[i]) - len(
+                        content_lines[i].lstrip()
+                    )
+                    indent = " " * original_indent
+                    new_lines = [
+                        indent + line.lstrip() if j == 0 else line
+                        for j, line in enumerate(new_lines)
+                    ]
+
+                content_lines[i : i + len(old_lines)] = new_lines
+                return "\n".join(content_lines)
+
         return False if not apply else content
-    
+
     def _create_unified_diff(self, original: str, modified: str, filename: str) -> str:
         """Create a unified diff between two text strings."""
         original_lines = original.splitlines(keepends=True)
         modified_lines = modified.splitlines(keepends=True)
-        
+
         diff = difflib.unified_diff(
             original_lines,
             modified_lines,
             fromfile=filename,
             tofile=filename,
-            lineterm=''
+            lineterm="",
         )
-        
-        diff_text = ''.join(diff)
-        
+
+        diff_text = "".join(diff)
+
         # Format with appropriate number of backticks
         num_backticks = 3
-        while '`' * num_backticks in diff_text:
+        while "`" * num_backticks in diff_text:
             num_backticks += 1
-        
+
         return f"{'`' * num_backticks}diff\n{diff_text}{'`' * num_backticks}\n\n"
-    
+
     async def _build_directory_tree(self, directory: Path) -> List[Dict[str, Any]]:
         """Build a recursive directory tree structure."""
         tree = []
-        
+
         try:
             for entry in directory.iterdir():
                 try:
                     # Validate each path before processing
                     await self.path_validator.validate_path(str(entry))
-                    
+
                     entry_data = {
-                        'name': entry.name,
-                        'type': 'directory' if entry.is_dir() else 'file'
+                        "name": entry.name,
+                        "type": "directory" if entry.is_dir() else "file",
                     }
-                    
+
                     if entry.is_dir():
-                        entry_data['children'] = await self._build_directory_tree(entry)
-                    
+                        entry_data["children"] = await self._build_directory_tree(entry)
+
                     tree.append(entry_data)
-                    
+
                 except (PermissionError, OSError):
                     # Skip entries we can't access
                     continue
-                    
+
         except (PermissionError, OSError):
             # Skip directories we can't read
             pass
-        
+
         return tree
-    
+
     async def _search_files_recursive(
         self, directory: Path, pattern: str, exclude_patterns: List[str]
     ) -> List[str]:
         """Recursively search for files matching a pattern."""
         results = []
-        
+
         try:
             for entry in directory.iterdir():
                 try:
                     # Validate path
                     await self.path_validator.validate_path(str(entry))
-                    
+
                     # Check exclusion patterns
                     relative_path = entry.relative_to(directory)
-                    if any(fnmatch.fnmatch(str(relative_path), pattern) 
-                           for pattern in exclude_patterns):
+                    if any(
+                        fnmatch.fnmatch(str(relative_path), pattern)
+                        for pattern in exclude_patterns
+                    ):
                         continue
-                    
+
                     # Check if name matches search pattern
                     if pattern.lower() in entry.name.lower():
                         results.append(str(entry))
-                    
+
                     # Recurse into directories
                     if entry.is_dir():
                         sub_results = await self._search_files_recursive(
                             entry, pattern, exclude_patterns
                         )
                         results.extend(sub_results)
-                        
+
                 except (PermissionError, OSError):
                     # Skip entries we can't access
                     continue
-                    
+
         except (PermissionError, OSError):
             # Skip directories we can't read
             pass
-        
+
         return results
-    
+
     async def _get_file_stats(self, file_path: Path) -> Dict[str, Any]:
         """Get detailed file statistics."""
         stat_result = file_path.stat()
-        
+
         return {
-            'size': stat_result.st_size,
-            'created': datetime.fromtimestamp(stat_result.st_ctime).isoformat(),
-            'modified': datetime.fromtimestamp(stat_result.st_mtime).isoformat(),
-            'accessed': datetime.fromtimestamp(stat_result.st_atime).isoformat(),
-            'is_directory': file_path.is_dir(),
-            'is_file': file_path.is_file(),
-            'permissions': oct(stat_result.st_mode)[-3:]
+            "size": stat_result.st_size,
+            "created": datetime.fromtimestamp(stat_result.st_ctime).isoformat(),
+            "modified": datetime.fromtimestamp(stat_result.st_mtime).isoformat(),
+            "accessed": datetime.fromtimestamp(stat_result.st_atime).isoformat(),
+            "is_directory": file_path.is_dir(),
+            "is_file": file_path.is_file(),
+            "permissions": oct(stat_result.st_mode)[-3:],
         }
-    
+
     def _format_size(self, bytes_size: int) -> str:
         """Format file size in human-readable format."""
-        units = ['B', 'KB', 'MB', 'GB', 'TB']
+        units = ["B", "KB", "MB", "GB", "TB"]
         if bytes_size == 0:
-            return '0 B'
-        
+            return "0 B"
+
         i = 0
         while bytes_size >= 1024 and i < len(units) - 1:
             bytes_size /= 1024
             i += 1
-        
+
         if i == 0:
             return f"{int(bytes_size)} {units[i]}"
         else:
             return f"{bytes_size:.2f} {units[i]}"
-    
+
     def start_server(self, host: str = "0.0.0.0", port: int = 8003):
         """Start the MCP server."""
-        self.mcp.run(transport="streamable-http", stateless_http=True, host=host, port=port)
+        self.mcp.run(
+            transport="streamable-http", stateless_http=True, host=host, port=port
+        )
+
 
 def main():
     """Main entry point for the MCP filesystem server."""
     parser = argparse.ArgumentParser(description="Dulayni MCP Filesystem Server")
     parser.add_argument(
         "directories",
-        nargs='*',
-        help="Allowed directories for filesystem operations (default: current directory)"
+        nargs="*",
+        help="Allowed directories for filesystem operations (default: current directory)",
     )
     parser.add_argument(
-        "--host",
-        default="0.0.0.0",
-        help="Host to bind to (default: 0.0.0.0)"
+        "--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)"
     )
     parser.add_argument(
-        "--port",
-        type=int,
-        default=8003,
-        help="Port to bind to (default: 8003)"
+        "--port", type=int, default=8003, help="Port to bind to (default: 8003)"
     )
-    
+
     args = parser.parse_args()
-    
+
     # FIXED: Use current working directory at runtime, not import time
     directories = args.directories if args.directories else [os.getcwd()]
-    
+
     # Validate that all directories exist and are accessible
     for directory in directories:
         dir_path = Path(directory).expanduser().resolve()
@@ -692,12 +1075,12 @@ def main():
         if not dir_path.is_dir():
             print(f"Error: Path is not a directory: {directory}")
             sys.exit(1)
-    
+
     # Create and start the server
     server = DulayniFileSystemMCP(directories)
     print(f"Starting Dulayni MCP Filesystem Server on {args.host}:{args.port}")
     print(f"Allowed directories: {', '.join(directories)}")
-    
+
     try:
         server.start_server(args.host, args.port)
     except KeyboardInterrupt:
@@ -705,6 +1088,7 @@ def main():
     except Exception as e:
         print(f"Server error: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
