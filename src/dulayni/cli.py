@@ -4,6 +4,8 @@
 import os
 import json
 import time
+import subprocess
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 import click
@@ -18,6 +20,7 @@ from .exceptions import (
     DulayniAuthenticationError,
 )
 from .mcp.start import start_server, stop_server, DEFAULT_PORT
+from .frpc_templates import FRPC_TOML_TEMPLATE, DOCKERFILE_TEMPLATE, DOCKER_COMPOSE_TEMPLATE
 
 console = Console()
 
@@ -58,6 +61,95 @@ def is_session_valid(session_data: Dict[str, Any]) -> bool:
     # Check if token has expired (assuming 24 hour expiry)
     expiry_time = session_data.get("expiry_time", 0)
     return time.time() < expiry_time
+
+# FRPC management
+def get_frpc_dir() -> Path:
+    """Get path to frpc directory."""
+    return Path(".frpc")
+
+def is_docker_available() -> bool:
+    """Check if Docker is available on the system."""
+    return shutil.which("docker") is not None
+
+def is_frpc_configured(phone_number: str) -> bool:
+    """Check if frpc is already configured for the given phone number."""
+    frpc_dir = get_frpc_dir()
+    frpc_toml = frpc_dir / "frpc.toml"
+    
+    if not frpc_toml.exists():
+        return False
+    
+    try:
+        with open(frpc_toml, "r") as f:
+            content = f.read()
+            return phone_number in content
+    except:
+        return False
+
+def setup_frpc(phone_number: str) -> bool:
+    """Set up frpc configuration and Docker container."""
+    frpc_dir = get_frpc_dir()
+    frpc_dir.mkdir(exist_ok=True)
+    
+    # Generate frpc.toml
+    frpc_toml_content = FRPC_TOML_TEMPLATE.format(phone_number=phone_number.replace('+', ''))
+    with open(frpc_dir / "frpc.toml", "w") as f:
+        f.write(frpc_toml_content)
+    
+    # Generate Dockerfile
+    with open(frpc_dir / "Dockerfile", "w") as f:
+        f.write(DOCKERFILE_TEMPLATE)
+    
+    # Generate docker-compose.yml
+    with open(frpc_dir / "docker-compose.yml", "w") as f:
+        f.write(DOCKER_COMPOSE_TEMPLATE)
+    
+    console.print(f"[green]Generated frpc configuration for phone number: {phone_number}[/green]")
+    
+    # Build and start the Docker container if Docker is available
+    if is_docker_available():
+        try:
+            # Build the Docker image
+            build_result = subprocess.run(
+                ["docker", "build", "-t", "dulayni-frpc", "."],
+                cwd=frpc_dir,
+                capture_output=True,
+                text=True
+            )
+            
+            if build_result.returncode != 0:
+                console.print(f"[yellow]Docker build failed: {build_result.stderr}[/yellow]")
+                return False
+            
+            # Stop any existing frpc container
+            subprocess.run(
+                ["docker", "rm", "-f", "frpc"],
+                cwd=frpc_dir,
+                capture_output=True
+            )
+            
+            # Run the new container
+            run_result = subprocess.run(
+                ["docker", "run", "--name", "frpc", "--network", "host", "-d", "dulayni-frpc"],
+                cwd=frpc_dir,
+                capture_output=True,
+                text=True
+            )
+            
+            if run_result.returncode == 0:
+                console.print("[green]FRPC Docker container started successfully[/green]")
+                return True
+            else:
+                console.print(f"[yellow]Failed to start FRPC container: {run_result.stderr}[/yellow]")
+                return False
+                
+        except Exception as e:
+            console.print(f"[yellow]Error managing Docker container: {str(e)}[/yellow]")
+            return False
+    else:
+        console.print("[yellow]Docker is not available. Please install Docker to run the FRPC container.[/yellow]")
+        console.print("[yellow]You can manually run the container with: docker build -t dulayni-frpc . && docker run --name frpc --network host -d dulayni-frpc[/yellow]")
+        return False
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -140,6 +232,23 @@ def cli():
 
 @cli.command()
 @click.option(
+    "--phone-number", "-p", required=True, help="Phone number for FRPC configuration"
+)
+def init(phone_number: str):
+    """Initialize FRPC configuration with your phone number."""
+    if is_frpc_configured(phone_number):
+        console.print("[green]FRPC is already configured with this phone number[/green]")
+        return
+    
+    success = setup_frpc(phone_number)
+    if success:
+        console.print("[green]FRPC initialization completed successfully[/green]")
+    else:
+        console.print("[yellow]FRPC initialization completed with warnings[/yellow]")
+
+
+@cli.command()
+@click.option(
     "--config",
     "-c",
     default="config/config.json",
@@ -166,8 +275,26 @@ def cli():
 @click.option("--system_prompt", "-s", help="Custom system prompt for the agent")
 @click.option("--api_url", help="URL of the Dulayni API server")
 @click.option("--thread_id", help="Thread ID for conversation continuity")
+@click.option("--skip-frpc", is_flag=True, help="Skip FRPC container check")
 def run(**cli_args):
     """Run a query using the dulayni agent."""
+    # Check if FRPC container is running
+    skip_frpc = cli_args.pop("skip_frpc", False)
+    phone_number = cli_args.get("phone_number")
+    
+    if not skip_frpc and phone_number and is_docker_available():
+        # Check if frpc container is running
+        check_result = subprocess.run(
+            ["docker", "ps", "--filter", "name=frpc", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True
+        )
+        
+        if "frpc" not in check_result.stdout:
+            console.print("[yellow]FRPC container is not running. Attempting to start it...[/yellow]")
+            if not setup_frpc(phone_number):
+                console.print("[yellow]Failed to start FRPC container. Proceeding without it...[/yellow]")
+    
     # Start MCP filesystem server in background
     proc = start_server(port=DEFAULT_PORT)
 
