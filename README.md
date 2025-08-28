@@ -12,7 +12,7 @@ The dulayni-client implements a secure two-factor authentication system:
 
 #### Programmatic Authentication
 ```python
-from dulayni_client import DulayniClient, Dul# dulayni-client
+from dulayni import DulayniClient, Dul# dulayni-client
 
 A CLI client and Python library for interacting with dulayni RAG agents via API.
 
@@ -50,7 +50,7 @@ A CLI client and Python library for interacting with dulayni RAG agents via API.
 ### As a Library
 
 ```python
-from dulayni_client import DulayniClient
+from dulayni import DulayniClient
 
 # Initialize the client
 client = DulayniClient(

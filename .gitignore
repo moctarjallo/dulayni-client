@@ -1,5 +1,5 @@
 .editignore
-dulayni-client.txt
+dulayni.txt
 uv.lock
 *.sqlite
 config

@@ -1,5 +1,5 @@
 [project]
-name = "dulayni-client"
+name = "dulayni"
 version = "0.1.0"
 description = "CLI client and library for interacting with dulayni RAG agents"
 readme = "README.md"
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dulayni = "dulayni_client.cli:main"
+dulayni = "dulayni.cli:main"
 
 [project.optional-dependencies]
 dev = [

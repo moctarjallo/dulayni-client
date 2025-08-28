@@ -1,4 +1,3 @@
-# -> src/dulayni_client/mcp/start.py
 import os
 import sys
 import subprocess
@@ -60,7 +59,7 @@ def start_server(
     cmd = [
         sys.executable,
         "-m",
-        "dulayni_client.mcp.filesystem",
+        "dulayni.mcp.filesystem",
         "--port",
         str(port),
     ] + directories

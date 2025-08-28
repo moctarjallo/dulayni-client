@@ -1,4 +1,3 @@
-# -> src/dulayni_client/cli.py
 #!/usr/bin/env python3
 """Dulayni CLI Client - Interact with dulayni RAG agents via API."""
 
@@ -24,6 +23,7 @@ console = Console()
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from JSON file."""
+    import ipdb;ipdb.set_trace()
     try:
         config_file = Path(config_path)
         if config_file.exists():
