@@ -1,7 +1,7 @@
 [project]
 name = "dulayni"
 version = "0.1.0"
-description = "CLI client and library for interacting with dulayni RAG agents"
+description = "CLI client and library for interacting with dulayni RAG agents via API"
 readme = "README.md"
 authors = [
     { name = "moctarjallo", email = "moctar.diallo@kajande.com" }
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dulayni = "dulayni.cli:main"
+dulayni = "dulayni.cli:cli"
 
 [project.optional-dependencies]
 dev = [
@@ -48,4 +48,3 @@ python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
-disallow_incomplete_defs = true

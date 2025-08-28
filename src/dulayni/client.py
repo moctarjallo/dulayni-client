@@ -1,4 +1,3 @@
-# client.py
 import requests
 from typing import Optional, Dict, Any
 import json
@@ -87,6 +86,11 @@ class DulayniClient:
         self.is_authenticated = False
         self.auth_token = None
         self.verification_session_id = None
+
+    def set_auth_token(self, auth_token: str):
+        """Set authentication token manually."""
+        self.auth_token = auth_token
+        self.is_authenticated = bool(auth_token)
 
     def request_verification_code(
         self, phone_number: Optional[str] = None

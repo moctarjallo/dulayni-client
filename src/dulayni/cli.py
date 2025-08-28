@@ -3,6 +3,7 @@
 
 import os
 import json
+import time
 from pathlib import Path
 from typing import Optional, Dict, Any
 import click
@@ -20,10 +21,47 @@ from .mcp.start import start_server, stop_server, DEFAULT_PORT
 
 console = Console()
 
+# Session management
+def get_session_path() -> Path:
+    """Get path to session file."""
+    return Path.home() / ".dulayni" / "session.json"
+
+def load_session() -> Optional[Dict[str, Any]]:
+    """Load session data from file."""
+    session_file = get_session_path()
+    if session_file.exists():
+        try:
+            with open(session_file, "r") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            pass
+    return None
+
+def save_session(session_data: Dict[str, Any]) -> None:
+    """Save session data to file."""
+    session_file = get_session_path()
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(session_file, "w") as f:
+        json.dump(session_data, f)
+
+def clear_session() -> None:
+    """Clear session data."""
+    session_file = get_session_path()
+    if session_file.exists():
+        session_file.unlink()
+
+def is_session_valid(session_data: Dict[str, Any]) -> bool:
+    """Check if session is still valid."""
+    if not session_data or not session_data.get("auth_token"):
+        return False
+    
+    # Check if token has expired (assuming 24 hour expiry)
+    expiry_time = session_data.get("expiry_time", 0)
+    return time.time() < expiry_time
+
 
 def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from JSON file."""
-    import ipdb;ipdb.set_trace()
     try:
         config_file = Path(config_path)
         if config_file.exists():
@@ -94,7 +132,13 @@ def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]
     return merged
 
 
-@click.command()
+@click.group()
+def cli():
+    """Dulayni CLI Client - Interact with dulayni RAG agents via API."""
+    pass
+
+
+@cli.command()
 @click.option(
     "--config",
     "-c",
@@ -122,9 +166,8 @@ def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]
 @click.option("--system_prompt", "-s", help="Custom system prompt for the agent")
 @click.option("--api_url", help="URL of the Dulayni API server")
 @click.option("--thread_id", help="Thread ID for conversation continuity")
-def main(**cli_args):
-    """Dulayni CLI Client - Interact with dulayni RAG agents via API"""
-
+def run(**cli_args):
+    """Run a query using the dulayni agent."""
     # Start MCP filesystem server in background
     proc = start_server(port=DEFAULT_PORT)
 
@@ -136,33 +179,41 @@ def main(**cli_args):
         # Merge config with CLI arguments
         merged_config = merge_config_with_args(config, **cli_args)
 
-        # Validate phone number is provided
-        if not merged_config.get("phone_number"):
-            console.print(
-                "[red]Error: Phone number is required. Use --phone-number or set PHONE_NUMBER environment variable[/red]"
-            )
-            raise click.Abort()
+        # Check for existing valid session
+        session_data = load_session()
+        phone_number = merged_config.get("phone_number")
+        
+        # Create client with only the parameters that were explicitly provided
+        client_params = {}
+        client_param_mapping = {
+            "api_url": "api_url",
+            "phone_number": "phone_number",
+            "model": "model",
+            "agent_type": "agent_type",
+            "thread_id": "thread_id",
+            "system_prompt": "system_prompt",
+            "mcp_servers": "mcp_servers",
+            "memory_db": "memory_db",
+            "pg_uri": "pg_uri",
+        }
 
-        try:
-            # Create client with only the parameters that were explicitly provided
-            client_params = {}
-            client_param_mapping = {
-                "api_url": "api_url",
-                "phone_number": "phone_number",
-                "model": "model",
-                "agent_type": "agent_type",
-                "thread_id": "thread_id",
-                "system_prompt": "system_prompt",
-                "mcp_servers": "mcp_servers",
-                "memory_db": "memory_db",
-                "pg_uri": "pg_uri",
-            }
+        for config_key, client_key in client_param_mapping.items():
+            if config_key in merged_config:
+                client_params[client_key] = merged_config[config_key]
 
-            for config_key, client_key in client_param_mapping.items():
-                if config_key in merged_config:
-                    client_params[client_key] = merged_config[config_key]
+        client = DulayniClient(**client_params)
 
-            client = DulayniClient(**client_params)
+        if is_session_valid(session_data) and session_data.get("phone_number") == phone_number:
+            # Use existing session
+            client.set_auth_token(session_data["auth_token"])
+            console.print("[green]Using existing authentication session[/green]")
+        else:
+            # Start new authentication flow
+            if not phone_number:
+                console.print(
+                    "[red]Error: Phone number is required. Use --phone-number or set PHONE_NUMBER environment variable[/red]"
+                )
+                raise click.Abort()
 
             # Handle authentication
             def prompt_for_verification_code():
@@ -172,20 +223,24 @@ def main(**cli_args):
 
             # Authenticate user
             console.print(
-                f"[yellow]Requesting verification code for {merged_config['phone_number']}...[/yellow]"
+                f"[yellow]Requesting verification code for {phone_number}...[/yellow]"
             )
             try:
                 client.request_verification_code()
                 code = prompt_for_verification_code()
-                client.verify_code(code)
+                verify_result = client.verify_code(code)
+                
+                # Save session data (assuming 24 hour expiry)
+                save_session({
+                    "phone_number": phone_number,
+                    "auth_token": verify_result.get("auth_token"),
+                    "expiry_time": time.time() + 24 * 60 * 60  # 24 hours
+                })
+                
                 console.print("[green]✓ Authentication successful[/green]")
             except DulayniAuthenticationError as e:
                 console.print(f"[red]Authentication failed: {str(e)}[/red]")
                 raise click.Abort()
-
-        except DulayniClientError as e:
-            console.print(f"[red]Configuration Error: {str(e)}[/red]")
-            raise click.Abort()
 
         if merged_config.get("query"):
             # Batch mode
@@ -286,5 +341,12 @@ def main(**cli_args):
             console.print("[yellow]MCP filesystem server process terminated[/yellow]")
 
 
+@cli.command()
+def logout():
+    """Clear authentication session."""
+    clear_session()
+    console.print("[green]Logged out successfully[/green]")
+
+
 if __name__ == "__main__":
-    main()
+    cli()
