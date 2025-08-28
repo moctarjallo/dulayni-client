@@ -413,13 +413,8 @@ def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]
     # API configuration
     add_if_not_none("api_url", cli_args.get("api_url") or config.get("api_url"))
 
-    # Phone number handling
-    phone_number = (
-        cli_args.get("phone_number")
-        or config.get("phone_number")
-        or os.environ.get("PHONE_NUMBER")
-    )
-    add_if_not_none("phone_number", phone_number)
+    # Phone number from config only (set during init)
+    add_if_not_none("phone_number", config.get("phone_number"))
 
     # CLI-only arguments
     add_if_not_none("query", cli_args.get("query"))
@@ -533,9 +528,6 @@ def init(phone_number: Optional[str]):
 @click.option(
     "--model", "-m", type=click.Choice(["gpt-4o", "gpt-4o-mini"]), help="Model name"
 )
-@click.option(
-    "--phone-number", "-p", help="Phone number for authentication"
-)
 @click.option("--query", "-q", type=str, help="Query string for batch mode")
 @click.option("--memory_db", help="Path to SQLite database for conversation memory")
 @click.option("--pg_uri", help="PostgreSQL URI for memory storage")
@@ -563,7 +555,20 @@ def run(**cli_args):
     
     # Check if FRPC container is running
     skip_frpc = cli_args.pop("skip_frpc", False)
-    phone_number = cli_args.get("phone_number")
+    
+    # Load configuration file first to get phone number
+    config_path = cli_args.pop("config")
+    config = load_config(config_path)
+    
+    # Merge config with CLI arguments
+    merged_config = merge_config_with_args(config, **cli_args)
+    
+    phone_number = merged_config.get("phone_number")
+    
+    if not phone_number:
+        console.print("[red]Error: No phone number found in configuration.[/red]")
+        console.print("[yellow]Please run '[bold cyan]dulayni init[/bold cyan]' first to set up your project with a phone number.[/yellow]")
+        raise click.Abort()
     
     if not skip_frpc and phone_number and is_docker_available():
         # Check if frpc container is running
@@ -582,23 +587,15 @@ def run(**cli_args):
     proc = start_server(port=DEFAULT_PORT)
 
     try:
-        # Load configuration file
-        config_path = cli_args.pop("config")
-        config = load_config(config_path)
-
-        # Merge config with CLI arguments
-        merged_config = merge_config_with_args(config, **cli_args)
-
-        # Add mcp servers (handled during initialization into config/config.json)
-        # phone_number = merged_config.get("phone_number")
-        # if phone_number:
-        #     mcp_servers = {
-        #         "filesystem": {
-        #             "url": f"http://{phone_number_clean}.{RELAY_HOST}.nip.io/mcp",
-        #             "transport": "streamable_http"
-        #         }
-        #     }
-        #     merged_config["mcp_servers"] = mcp_servers
+        # Add mcp servers using phone number from config
+        if phone_number and not merged_config.get("mcp_servers", None):
+            mcp_servers = {
+                "local": {
+                    "url": f"http://{phone_number.replace('+', '')}.{RELAY_HOST}.nip.io/mcp",
+                    "transport": "streamable_http"
+                }
+            }
+            merged_config["mcp_servers"] = mcp_servers
 
         # Check for existing valid session
         session_data = load_session()
@@ -629,12 +626,6 @@ def run(**cli_args):
             console.print("[green]Using existing authentication session[/green]")
         else:
             # Start new authentication flow
-            # if not phone_number:
-            #     console.print(
-            #         "[red]Error: Phone number is required. Use --phone-number or set PHONE_NUMBER environment variable[/red]"
-            #     )
-            #     raise click.Abort()
-
             # Handle authentication
             def prompt_for_verification_code():
                 return console.input(
