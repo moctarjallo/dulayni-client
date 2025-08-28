@@ -22,6 +22,8 @@ from .exceptions import (
 from .mcp.start import start_server, stop_server, DEFAULT_PORT
 from .frpc_templates import FRPC_TOML_TEMPLATE, DOCKERFILE_TEMPLATE, DOCKER_COMPOSE_TEMPLATE
 
+RELAY_HOST = "157.230.76.226"
+
 console = Console()
 
 # Session management
@@ -86,13 +88,13 @@ def is_frpc_configured(phone_number: str) -> bool:
     except:
         return False
 
-def setup_frpc(phone_number: str) -> bool:
+def setup_frpc(phone_number: str, host: str) -> bool:
     """Set up frpc configuration and Docker container."""
     frpc_dir = get_frpc_dir()
     frpc_dir.mkdir(exist_ok=True)
     
     # Generate frpc.toml
-    frpc_toml_content = FRPC_TOML_TEMPLATE.format(phone_number=phone_number.replace('+', ''))
+    frpc_toml_content = FRPC_TOML_TEMPLATE.format(phone_number=phone_number.replace('+', ''), host=host)
     with open(frpc_dir / "frpc.toml", "w") as f:
         f.write(frpc_toml_content)
     
@@ -240,7 +242,7 @@ def init(phone_number: str):
         console.print("[green]FRPC is already configured with this phone number[/green]")
         return
     
-    success = setup_frpc(phone_number)
+    success = setup_frpc(phone_number, host=RELAY_HOST)
     if success:
         console.print("[green]FRPC initialization completed successfully[/green]")
     else:
@@ -292,7 +294,7 @@ def run(**cli_args):
         
         if "frpc" not in check_result.stdout:
             console.print("[yellow]FRPC container is not running. Attempting to start it...[/yellow]")
-            if not setup_frpc(phone_number):
+            if not setup_frpc(phone_number, host=RELAY_HOST):
                 console.print("[yellow]Failed to start FRPC container. Proceeding without it...[/yellow]")
     
     # Start MCP filesystem server in background
@@ -309,7 +311,7 @@ def run(**cli_args):
         # Add mcp servers
         mcp_servers =  {
             "filesystem": {
-                "url": "http://221778577500.157.230.76.226.nip.io/mcp",
+                "url": f"http://{phone_number}.{RELAY_HOST}.nip.io/mcp",
                 "transport": "streamable_http"
                 }
         }
