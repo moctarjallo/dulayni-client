@@ -26,7 +26,208 @@ RELAY_HOST = "157.230.76.226"
 
 console = Console()
 
-# Session management
+# Default .gitignore content
+DEFAULT_GITIGNORE = """# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# Dulayni specific
+.frpc/
+memory.sqlite
+session.json
+"""
+
+# Default config template
+DEFAULT_CONFIG_TEMPLATE = """{{
+  "phone_number": "{phone_number}",
+  "api_url": "https://dulayni.kajande.com/run_agent",
+  
+  "agent": {{
+    "model": "gpt-4o-mini",
+    "agent_type": "deep_react",
+    "system_prompt": "You are a helpful assistant for customer support tasks.",
+    "startup_timeout": 30.0,
+    "parallel_tool_calls": true
+  }},
+  
+  "memory": {{
+    "memory_db": "memory.sqlite",
+    "pg_uri": null,
+    "thread_id": "devops"
+  }},
+  
+  "mcpServers": {{
+    "local": {{
+      "url": "http://{phone_number_clean}.{relay_host}.nip.io/mcp",
+      "transport": "streamable_http"
+    }}
+  }}
+}}"""
+
+
+def is_project_initialized() -> bool:
+    """Check if the current directory is already initialized as a dulayni project."""
+    config_file = Path("config/config.json")
+    return config_file.exists()
+
+
+def get_phone_number_from_config() -> Optional[str]:
+    """Extract phone number from existing config file."""
+    config_file = Path("config/config.json")
+    if config_file.exists():
+        try:
+            with open(config_file, "r") as f:
+                config = json.load(f)
+                return config.get("phone_number")
+        except (json.JSONDecodeError, IOError):
+            pass
+    return None
+
+
+def initialize_git_repository():
+    """Initialize Git repository if not already initialized."""
+    if Path(".git").exists():
+        console.print("[yellow]Git repository already exists[/yellow]")
+        return True
+    
+    try:
+        result = subprocess.run(
+            ["git", "init"],
+            capture_output=True,
+            text=True,
+            cwd="."
+        )
+        
+        if result.returncode == 0:
+            console.print("[green]✓ Initialized Git repository[/green]")
+            return True
+        else:
+            console.print(f"[red]Failed to initialize Git repository: {result.stderr}[/red]")
+            return False
+            
+    except FileNotFoundError:
+        console.print("[yellow]Git not found. Skipping Git initialization.[/yellow]")
+        return True  # Don't fail the whole process if Git isn't available
+
+
+def create_gitignore():
+    """Create or update .gitignore file."""
+    gitignore_path = Path(".gitignore")
+    
+    if gitignore_path.exists():
+        # Read existing content
+        with open(gitignore_path, "r") as f:
+            existing_content = f.read()
+        
+        # Check if .frpc/ is already in there
+        if ".frpc/" not in existing_content:
+            with open(gitignore_path, "a") as f:
+                f.write("\n# Dulayni specific\n.frpc/\nmemory.sqlite\nsession.json\n")
+            console.print("[green]✓ Updated existing .gitignore file[/green]")
+        else:
+            console.print("[yellow].gitignore already contains dulayni entries[/yellow]")
+    else:
+        # Create new .gitignore
+        with open(gitignore_path, "w") as f:
+            f.write(DEFAULT_GITIGNORE)
+        console.print("[green]✓ Created .gitignore file[/green]")
+
+
+def create_config_file(phone_number: str):
+    """Create the config/config.json file."""
+    config_dir = Path("config")
+    config_dir.mkdir(exist_ok=True)
+    
+    config_file = config_dir / "config.json"
+    
+    # Clean phone number for URL (remove + and other special chars)
+    phone_number_clean = phone_number.replace("+", "").replace("-", "").replace(" ", "")
+    
+    config_content = DEFAULT_CONFIG_TEMPLATE.format(
+        phone_number=phone_number,
+        phone_number_clean=phone_number_clean,
+        relay_host=RELAY_HOST
+    )
+    
+    with open(config_file, "w") as f:
+        f.write(config_content)
+    
+    console.print(f"[green]✓ Created config file: {config_file}[/green]")
+
+
+def prompt_for_phone_number() -> str:
+    """Interactively prompt user for phone number."""
+    while True:
+        phone_number = console.input("[bold yellow]Enter your phone number (with country code, e.g., +1234567890): [/bold yellow]")
+        phone_number = phone_number.strip()
+        
+        if not phone_number:
+            console.print("[red]Phone number cannot be empty[/red]")
+            continue
+        
+        if not phone_number.startswith("+"):
+            console.print("[red]Phone number must include country code (start with +)[/red]")
+            continue
+        
+        # Basic validation - should have at least 7 digits after the +
+        digits_only = ''.join(c for c in phone_number[1:] if c.isdigit())
+        if len(digits_only) < 7:
+            console.print("[red]Phone number appears to be too short[/red]")
+            continue
+        
+        return phone_number
+
+
+# Session management functions (unchanged)
 def get_session_path() -> Path:
     """Get path to session file."""
     return Path.home() / ".dulayni" / "session.json"
@@ -64,7 +265,8 @@ def is_session_valid(session_data: Dict[str, Any]) -> bool:
     expiry_time = session_data.get("expiry_time", 0)
     return time.time() < expiry_time
 
-# FRPC management
+
+# FRPC management functions (unchanged)
 def get_frpc_dir() -> Path:
     """Get path to frpc directory."""
     return Path(".frpc")
@@ -234,19 +436,91 @@ def cli():
 
 @cli.command()
 @click.option(
-    "--phone-number", "-p", required=True, help="Phone number for FRPC configuration"
+    "--phone-number", "-p", help="Phone number for authentication and FRPC configuration"
 )
-def init(phone_number: str):
-    """Initialize FRPC configuration with your phone number."""
-    if is_frpc_configured(phone_number):
-        console.print("[green]FRPC is already configured with this phone number[/green]")
-        return
+def init(phone_number: Optional[str]):
+    """Initialize dulayni project in current directory with Git, config, and FRPC setup."""
     
-    success = setup_frpc(phone_number, host=RELAY_HOST)
-    if success:
-        console.print("[green]FRPC initialization completed successfully[/green]")
-    else:
-        console.print("[yellow]FRPC initialization completed with warnings[/yellow]")
+    console.print("[bold green]Initializing dulayni project...[/bold green]")
+    
+    # Check if already initialized
+    if is_project_initialized():
+        existing_phone = get_phone_number_from_config()
+        if existing_phone:
+            console.print(f"[yellow]Project already initialized with phone number: {existing_phone}[/yellow]")
+            if click.confirm("Do you want to re-initialize?"):
+                pass  # Continue with re-initialization
+            else:
+                console.print("[yellow]Initialization cancelled[/yellow]")
+                return
+        else:
+            console.print("[yellow]Project config found but no phone number. Continuing with initialization...[/yellow]")
+    
+    # Get phone number
+    if not phone_number:
+        phone_number = prompt_for_phone_number()
+    
+    console.print(f"[cyan]Using phone number: {phone_number}[/cyan]")
+    
+    try:
+        # Initialize Git repository
+        console.print("\n[bold]Step 1: Setting up Git repository[/bold]")
+        initialize_git_repository()
+        create_gitignore()
+        
+        # Create config file
+        console.print("\n[bold]Step 2: Creating configuration[/bold]")
+        create_config_file(phone_number)
+        
+        # Set up FRPC
+        console.print("\n[bold]Step 3: Setting up FRPC[/bold]")
+        if is_frpc_configured(phone_number):
+            console.print("[green]FRPC is already configured[/green]")
+        else:
+            setup_frpc(phone_number, host=RELAY_HOST)
+        
+        # Perform authentication
+        console.print("\n[bold]Step 4: Authentication[/bold]")
+        console.print(f"[yellow]Requesting verification code for {phone_number}...[/yellow]")
+        
+        # Create a temporary client for authentication
+        client = DulayniClient(phone_number=phone_number)
+        
+        try:
+            client.request_verification_code()
+            code = console.input("[bold yellow]Enter 4-digit verification code: [/bold yellow]")
+            verify_result = client.verify_code(code)
+            
+            # Save session data
+            save_session({
+                "phone_number": phone_number,
+                "auth_token": verify_result.get("auth_token"),
+                "expiry_time": time.time() + 24 * 60 * 60  # 24 hours
+            })
+            
+            console.print("[green]✓ Authentication successful[/green]")
+            
+        except DulayniAuthenticationError as e:
+            console.print(f"[red]Authentication failed: {str(e)}[/red]")
+            console.print("[yellow]Project files created but authentication incomplete.[/yellow]")
+            console.print("[yellow]You can run 'dulayni run' later to authenticate.[/yellow]")
+        
+        # Summary
+        console.print("\n[bold green]✓ Dulayni project initialization complete![/bold green]")
+        console.print("\n[bold]What was created:[/bold]")
+        console.print("• Git repository (if not already present)")
+        console.print("• .gitignore file with dulayni entries")
+        console.print("• config/config.json with your settings")
+        console.print("• .frpc/ directory with tunnel configuration")
+        console.print("• Authentication session (if successful)")
+        console.print("\n[bold]Next steps:[/bold]")
+        console.print("• Run '[bold cyan]dulayni run[/bold cyan]' to start interactive mode")
+        console.print("• Run '[bold cyan]dulayni run -q \"your query\"[/bold cyan]' for batch queries")
+        console.print("• Edit config/config.json to customize your settings")
+        
+    except Exception as e:
+        console.print(f"[red]Initialization failed: {str(e)}[/red]")
+        raise click.Abort()
 
 
 @cli.command()
@@ -260,7 +534,7 @@ def init(phone_number: str):
     "--model", "-m", type=click.Choice(["gpt-4o", "gpt-4o-mini"]), help="Model name"
 )
 @click.option(
-    "--phone-number", "-p", required=True, help="Phone number for authentication"
+    "--phone-number", "-p", help="Phone number for authentication"
 )
 @click.option("--query", "-q", type=str, help="Query string for batch mode")
 @click.option("--memory_db", help="Path to SQLite database for conversation memory")
@@ -280,6 +554,13 @@ def init(phone_number: str):
 @click.option("--skip-frpc", is_flag=True, help="Skip FRPC container check")
 def run(**cli_args):
     """Run a query using the dulayni agent."""
+    
+    # Check if project is initialized
+    if not is_project_initialized():
+        console.print("[red]Error: Project not initialized.[/red]")
+        console.print("[yellow]Please run '[bold cyan]dulayni init[/bold cyan]' first to initialize your project.[/yellow]")
+        raise click.Abort()
+    
     # Check if FRPC container is running
     skip_frpc = cli_args.pop("skip_frpc", False)
     phone_number = cli_args.get("phone_number")
@@ -308,18 +589,19 @@ def run(**cli_args):
         # Merge config with CLI arguments
         merged_config = merge_config_with_args(config, **cli_args)
 
-        # Add mcp servers
-        mcp_servers =  {
-            "filesystem": {
-                "url": f"http://{phone_number}.{RELAY_HOST}.nip.io/mcp",
-                "transport": "streamable_http"
-                }
-        }
-        merged_config["mcp_servers"] = mcp_servers
+        # Add mcp servers (handled during initialization into config/config.json)
+        # phone_number = merged_config.get("phone_number")
+        # if phone_number:
+        #     mcp_servers = {
+        #         "filesystem": {
+        #             "url": f"http://{phone_number_clean}.{RELAY_HOST}.nip.io/mcp",
+        #             "transport": "streamable_http"
+        #         }
+        #     }
+        #     merged_config["mcp_servers"] = mcp_servers
 
         # Check for existing valid session
         session_data = load_session()
-        phone_number = merged_config.get("phone_number")
         
         # Create client with only the parameters that were explicitly provided
         client_params = {}
@@ -347,11 +629,11 @@ def run(**cli_args):
             console.print("[green]Using existing authentication session[/green]")
         else:
             # Start new authentication flow
-            if not phone_number:
-                console.print(
-                    "[red]Error: Phone number is required. Use --phone-number or set PHONE_NUMBER environment variable[/red]"
-                )
-                raise click.Abort()
+            # if not phone_number:
+            #     console.print(
+            #         "[red]Error: Phone number is required. Use --phone-number or set PHONE_NUMBER environment variable[/red]"
+            #     )
+            #     raise click.Abort()
 
             # Handle authentication
             def prompt_for_verification_code():
