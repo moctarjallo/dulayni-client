@@ -23,12 +23,15 @@ class DulayniClient:
     3. User enters verification code
     4. Client can then make queries
 
+    Alternatively, provide an Dulayni API key to skip authentication.
+
     All parameters are optional - if not provided, the server will use
     defaults from its configuration file.
 
     Args:
         api_url: URL of the Dulayni API server
         phone_number: Phone number for authentication
+        dulayni_api_key: Dulayni API key to skip authentication
         model: Model name to use
         agent_type: Type of agent ("react" or "deep_react")
         thread_id: Thread ID for conversation continuity
@@ -52,6 +55,7 @@ class DulayniClient:
         self,
         api_url: Optional[str] = None,
         phone_number: Optional[str] = None,
+        dulayni_api_key: Optional[str] = None,
         model: Optional[str] = None,
         agent_type: Optional[str] = None,
         thread_id: Optional[str] = None,
@@ -73,6 +77,7 @@ class DulayniClient:
 
         # Store all parameters as-is (including None values)
         self.phone_number = phone_number
+        self.dulayni_api_key = dulayni_api_key
         self.model = model
         self.agent_type = agent_type
         self.thread_id = thread_id
@@ -92,6 +97,13 @@ class DulayniClient:
         self.auth_token = auth_token
         self.is_authenticated = bool(auth_token)
 
+    def set_dulayni_api_key(self, dulayni_api_key: str):
+        """Set Dulayni API key manually."""
+        self.dulayni_api_key = dulayni_api_key
+        # If Dulayni API key is provided, skip authentication
+        if dulayni_api_key:
+            self.is_authenticated = True
+
     def request_verification_code(
         self, phone_number: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -108,6 +120,14 @@ class DulayniClient:
             DulayniAuthenticationError: If phone number is invalid or request fails
             DulayniConnectionError: If unable to connect to server
         """
+        # Skip if Dulayni API key is provided
+        if self.dulayni_api_key:
+            return {
+                "status": "skipped",
+                "message": "Dulayni API key provided, skipping WhatsApp authentication",
+                "session_id": ""
+            }
+
         phone = phone_number or self.phone_number
         if not phone:
             raise DulayniAuthenticationError(
@@ -164,6 +184,14 @@ class DulayniClient:
             DulayniAuthenticationError: If verification fails
             DulayniConnectionError: If unable to connect to server
         """
+        # Skip if Dulayni API key is provided
+        if self.dulayni_api_key:
+            return {
+                "status": "skipped",
+                "message": "Dulayni API key provided, skipping WhatsApp authentication",
+                "auth_token": None
+            }
+
         session = session_id or self.verification_session_id
         if not session:
             raise DulayniAuthenticationError(
@@ -214,6 +242,11 @@ class DulayniClient:
         Raises:
             DulayniAuthenticationError: If authentication fails or phone number not set
         """
+        # Skip if Dulayni API key is provided
+        if self.dulayni_api_key:
+            self.is_authenticated = True
+            return True
+
         if not self.phone_number:
             raise DulayniAuthenticationError(
                 "Phone number must be set before authentication"
@@ -250,6 +283,7 @@ class DulayniClient:
                 - memory_db: Override the memory database for this query
                 - mcp_servers: Override the MCP servers config for this query
                 - pg_uri: Override the PostgreSQL URI for this query
+                - dulayni_api_key: Override the Dulayni API key for this query
 
         Returns:
             str: The response from the dulayni agent
@@ -260,16 +294,19 @@ class DulayniClient:
             DulayniTimeoutError: If the request times out
             DulayniClientError: For other API errors
         """
-        # Check authentication
-        if not self.is_authenticated:
+        # Check authentication - allow either Dulayni key or WhatsApp auth
+        if not self.is_authenticated and not self.dulayni_api_key:
             raise DulayniAuthenticationError(
-                "Authentication required. Call authenticate() or verify_code() first."
+                "Authentication required. Call authenticate() or verify_code() first, or provide Dulayni API key."
             )
 
         payload = self._build_payload(content, **kwargs)
 
         try:
-            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            headers = {}
+            if self.auth_token:
+                headers["Authorization"] = f"Bearer {self.auth_token}"
+            
             response = requests.post(
                 self.api_url,
                 json=payload,
@@ -321,16 +358,19 @@ class DulayniClient:
             DulayniTimeoutError: If the request times out
             DulayniClientError: For other API errors
         """
-        # Check authentication
-        if not self.is_authenticated:
+        # Check authentication - allow either Dulayni key or WhatsApp auth
+        if not self.is_authenticated and not self.dulayni_api_key:
             raise DulayniAuthenticationError(
-                "Authentication required. Call authenticate() or verify_code() first."
+                "Authentication required. Call authenticate() or verify_code() first, or provide Dulayni API key."
             )
 
         payload = self._build_payload(content, **kwargs)
 
         try:
-            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            headers = {}
+            if self.auth_token:
+                headers["Authorization"] = f"Bearer {self.auth_token}"
+            
             response = requests.post(
                 self.api_url,
                 json=payload,
@@ -383,6 +423,7 @@ class DulayniClient:
             "memory_db",
             "pg_uri",
             "mcp_servers",
+            "dulayni_api_key",
         ]
 
         for field in optional_fields:
