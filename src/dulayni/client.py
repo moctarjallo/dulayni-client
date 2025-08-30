@@ -23,12 +23,15 @@ class DulayniClient:
     3. User enters verification code
     4. Client can then make queries
 
+    Alternatively, users can provide an API key for authentication.
+
     All parameters are optional - if not provided, the server will use
     defaults from its configuration file.
 
     Args:
         api_url: URL of the Dulayni API server
         phone_number: Phone number for authentication
+        dulayni_api_key: API key for authentication (alternative to phone auth)
         model: Model name to use
         agent_type: Type of agent ("react" or "deep_react")
         thread_id: Thread ID for conversation continuity
@@ -46,12 +49,20 @@ class DulayniClient:
         >>> # Authentication happens automatically on first query
         >>> response = client.query("What's 2+2?")
         >>> print(response)
+        
+        >>> # Or with API key
+        >>> client = DulayniClient(
+        ...     dulayni_api_key="your-api-key",
+        ...     api_url="http://localhost:8002"
+        ... )
+        >>> response = client.query("What's 2+2?")
     """
 
     def __init__(
         self,
         api_url: Optional[str] = None,
         phone_number: Optional[str] = None,
+        dulayni_api_key: Optional[str] = None,
         model: Optional[str] = None,
         agent_type: Optional[str] = None,
         thread_id: Optional[str] = None,
@@ -73,6 +84,7 @@ class DulayniClient:
 
         # Store all parameters as-is (including None values)
         self.phone_number = phone_number
+        self.dulayni_api_key = dulayni_api_key
         self.model = model
         self.agent_type = agent_type
         self.thread_id = thread_id
@@ -91,6 +103,12 @@ class DulayniClient:
         """Set authentication token manually."""
         self.auth_token = auth_token
         self.is_authenticated = bool(auth_token)
+
+    def set_api_key(self, api_key: str):
+        """Set API key manually."""
+        self.dulayni_api_key = api_key
+        # API key authentication doesn't require the traditional auth flow
+        self.is_authenticated = bool(api_key)
 
     def request_verification_code(
         self, phone_number: Optional[str] = None
@@ -260,8 +278,8 @@ class DulayniClient:
             DulayniTimeoutError: If the request times out
             DulayniClientError: For other API errors
         """
-        # Check authentication
-        if not self.is_authenticated:
+        # Check authentication - skip if API key is provided
+        if not self.is_authenticated and not self.dulayni_api_key:
             raise DulayniAuthenticationError(
                 "Authentication required. Call authenticate() or verify_code() first."
             )
@@ -269,7 +287,12 @@ class DulayniClient:
         payload = self._build_payload(content, **kwargs)
 
         try:
-            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            # Use API key if provided, otherwise use JWT
+            if self.dulayni_api_key:
+                headers = {"X-API-Key": self.dulayni_api_key}
+            else:
+                headers = {"Authorization": f"Bearer {self.auth_token}"}
+                
             response = requests.post(
                 self.api_url,
                 json=payload,
@@ -321,8 +344,8 @@ class DulayniClient:
             DulayniTimeoutError: If the request times out
             DulayniClientError: For other API errors
         """
-        # Check authentication
-        if not self.is_authenticated:
+        # Check authentication - skip if API key is provided
+        if not self.is_authenticated and not self.dulayni_api_key:
             raise DulayniAuthenticationError(
                 "Authentication required. Call authenticate() or verify_code() first."
             )
@@ -330,7 +353,12 @@ class DulayniClient:
         payload = self._build_payload(content, **kwargs)
 
         try:
-            headers = {"Authorization": f"Bearer {self.auth_token}"}
+            # Use API key if provided, otherwise use JWT
+            if self.dulayni_api_key:
+                headers = {"X-API-Key": self.dulayni_api_key}
+            else:
+                headers = {"Authorization": f"Bearer {self.auth_token}"}
+                
             response = requests.post(
                 self.api_url,
                 json=payload,
@@ -433,6 +461,12 @@ class DulayniClient:
         self.auth_token = None
         self.verification_session_id = None
 
+    def set_api_key(self, api_key: Optional[str]) -> None:
+        """Set the API key for authentication."""
+        self.dulayni_api_key = api_key
+        # API key authentication doesn't require the traditional auth flow
+        self.is_authenticated = bool(api_key)
+
     def health_check(self) -> Dict[str, Any]:
         """
         Check if the dulayni server is healthy and reachable using the /health endpoint.
@@ -443,7 +477,15 @@ class DulayniClient:
         try:
             # Use the server's health endpoint
             health_url = f"{self.base_url}/health"
-            response = requests.get(health_url, timeout=5.0)
+            
+            # Use API key if available for health check
+            headers = {}
+            if self.dulayni_api_key:
+                headers = {"X-API-Key": self.dulayni_api_key}
+            elif self.auth_token:
+                headers = {"Authorization": f"Bearer {self.auth_token}"}
+                
+            response = requests.get(health_url, headers=headers, timeout=5.0)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.ConnectionError:
