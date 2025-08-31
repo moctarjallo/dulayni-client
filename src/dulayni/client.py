@@ -82,7 +82,7 @@ class DulayniClient:
         self.agent_type = agent_type
         self.thread_id = thread_id
         self.system_prompt = system_prompt
-        self.mcp_servers = {"mcpServers": mcp_servers}
+        self.mcp_servers = mcp_servers
         self.memory_db = memory_db
         self.pg_uri = pg_uri
         self.request_timeout = request_timeout
