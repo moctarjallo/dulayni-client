@@ -423,6 +423,30 @@ class DulayniFileSystemMCP:
         """Register all MCP tools."""
 
         @self.mcp.tool()
+        async def getcwd() -> str:
+            """
+            Get the current working directory where the dulayni command is being run from.
+            This shows the directory context from which the server was started, which is useful
+            for understanding relative path operations and the current working context.
+            """
+            current_dir = os.getcwd()
+            
+            # Check if current directory is within allowed directories
+            current_path = Path(current_dir).resolve()
+            is_allowed = any(
+                str(current_path).startswith(str(allowed_dir)) 
+                for allowed_dir in self.path_validator.allowed_directories
+            )
+            
+            if is_allowed:
+                return f"Current working directory: {current_dir}"
+            else:
+                # If current directory is outside allowed directories, show it but with a warning
+                allowed_dirs_str = ", ".join(str(d) for d in self.path_validator.allowed_directories)
+                return (f"Current working directory: {current_dir}\n"
+                        f"WARNING: Current directory is outside allowed directories ({allowed_dirs_str})")
+
+        @self.mcp.tool()
         async def read_text_file(
             path: str, head: Optional[int] = None, tail: Optional[int] = None
         ) -> str:
