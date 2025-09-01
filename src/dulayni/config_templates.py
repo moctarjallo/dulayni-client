@@ -75,7 +75,7 @@ DEFAULT_CONFIG_TEMPLATE = """{{
   "memory": {{
     "memory_db": "memory.sqlite",
     "pg_uri": null,
-    "thread_id": "devops"
+    "thread_id": "{phone_number_clean}"
   }},
   
   "mcpServers": {{
