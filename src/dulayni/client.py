@@ -1,8 +1,18 @@
-#-> src/dulayni/client.py
+import ast
 import requests
 from typing import Optional, Dict, Any, Generator
 import json
 import sseclient
+import time
+from rich.console import Console
+from rich.spinner import Spinner
+from rich.live import Live
+from rich.panel import Panel
+from rich.text import Text
+from rich.syntax import Syntax
+from rich.table import Table
+from rich.markdown import Markdown
+import re
 
 from .exceptions import (
     DulayniClientError,
@@ -12,45 +22,154 @@ from .exceptions import (
 )
 
 
+class ToolExecutionDisplay:
+    def __init__(self):
+        self.console = Console()
+        self.active_tools = {}
+        self.live_displays = {}
+        
+    def start_tool(self, tool_name, tool_call_id, input_args):
+        """Display tool execution start with a spinner"""
+        self.active_tools[tool_call_id] = {
+            "name": tool_name,
+            "start_time": time.time(),
+            "spinner": Spinner("dots", text=f"Executing {tool_name} on {input_args}...")
+        }
+        
+        # Create a panel for the tool execution
+        panel = Panel(
+            self.active_tools[tool_call_id]["spinner"],
+            title=f"[bold blue]🛠️  Executing {tool_name}[/bold blue]",
+            subtitle=f"Started at {time.strftime('%H:%M:%S')}",
+            border_style="blue",
+            padding=(1, 2)
+        )
+        
+        # Start a live display for this tool
+        self.live_displays[tool_call_id] = Live(panel, console=self.console, refresh_per_second=10)
+        self.live_displays[tool_call_id].start()
+        
+    def end_tool(self, tool_name, tool_call_id, output, execution_time):
+        """Display tool execution completion"""
+        if tool_call_id in self.active_tools:
+            # Stop the live display
+            if tool_call_id in self.live_displays:
+                self.live_displays[tool_call_id].stop()
+                del self.live_displays[tool_call_id]
+            
+            # Format the output
+            output_content = self._format_output(output)
+            
+            # Create completion panel
+            completion_panel = Panel(
+                output_content,
+                title=f"[bold green]✅ Completed {tool_name}[/bold green]",
+                subtitle=f"Execution time: {execution_time:.2f}s",
+                border_style="green",
+                padding=(1, 2)
+            )
+            
+            self.console.print(completion_panel)
+            del self.active_tools[tool_call_id]
+
+    def _format_output(self, output):
+        """Format the tool output appropriately"""
+        if not output:
+            return Text("No output", style="italic")
+        
+        # Try to detect and format JSON
+        json_match = re.search(r'\{.*\}', output, re.DOTALL)
+        if json_match:
+            try:
+                json_data = json.loads(json_match.group())
+                formatted_json = json.dumps(json_data, indent=2)
+                return Syntax(formatted_json, "json", theme="monokai", line_numbers=True)
+            except:
+                pass
+        
+        # Try to detect code blocks
+        code_match = re.search(r'```(\w+)?\s*(.*?)```', output, re.DOTALL)
+        if code_match:
+            language = code_match.group(1) or "text"
+            code_content = code_match.group(2).strip()
+            return Syntax(code_content, language, theme="monokai", line_numbers=True)
+        
+        # Default to text with markdown rendering
+        try:
+            return Markdown(output)
+        except:
+            return Text(output)
+
+    def update_todos(self, todos_content):
+        """Display todos in a formatted table with status indicators."""
+        if not todos_content:
+            return
+            
+        try:
+            # Parse the todos JSON
+            todos = ast.literal_eval(todos_content)
+            
+            if not todos:
+                return
+                
+            # Create a table for todos
+            table = Table(
+                title="📋 Task List", 
+                show_header=True, 
+                header_style="bold magenta",
+                box=None,
+                padding=(0, 1),
+                show_lines=True
+            )
+            table.add_column("Status", style="cyan", justify="center", width=10)
+            table.add_column("Task", style="white", no_wrap=False)
+            
+            # Add todos to table with appropriate status indicators
+            for todo in todos:
+                if not isinstance(todo, dict):
+                    continue
+                    
+                status = todo.get('status', 'pending')
+                task_content = todo.get('content', 'Unknown task')
+                
+                # Format based on status
+                if status == 'completed':
+                    status_icon = "[green]✅[/green]"
+                    task_style = "dim"
+                elif status == 'in_progress':
+                    status_icon = "[blue]🔄[/blue]"
+                    task_style = "bold blue"
+                else:  # pending
+                    status_icon = "[yellow]⏳[/yellow]"
+                    task_style = "yellow"
+                    
+                table.add_row(status_icon, f"[{task_style}]{task_content}[/{task_style}]")
+            
+            # Add summary
+            completed = sum(1 for todo in todos if isinstance(todo, dict) and todo.get('status') == 'completed')
+            in_progress = sum(1 for todo in todos if isinstance(todo, dict) and todo.get('status') == 'in_progress')
+            pending = sum(1 for todo in todos if isinstance(todo, dict) and todo.get('status') == 'pending')
+            
+            summary_text = f"[green]✅ {completed} completed[/green] | [blue]🔄 {in_progress} in progress[/blue] | [yellow]⏳ {pending} pending[/yellow]"
+            
+            panel = Panel(
+                table,
+                title="[bold yellow]Task Management[/bold yellow]",
+                subtitle=summary_text,
+                border_style="yellow",
+                padding=(1, 1)
+            )
+            self.console.print(panel)
+            
+        except Exception as e:
+            # Silently fail on todos parsing errors
+            # if DEBUG_TOOLS:
+            self.console.print(f"[yellow]Could not parse todos: {e}[/yellow]")
+
+
 class DulayniClient:
     """
     A client for interacting with dulayni RAG agents via API.
-
-    This class provides both programmatic access to the dulayni server
-    and can be used as a library in other applications.
-
-    The client implements a two-factor authentication flow:
-    1. User provides phone number
-    2. Backend sends 4-digit verification code via WhatsApp
-    3. User enters verification code
-    4. Client can then make queries
-
-    Alternatively, provide an Dulayni API key to skip authentication.
-
-    All parameters are optional - if not provided, the server will use
-    defaults from its configuration file.
-
-    Args:
-        api_url: URL of the Dulayni API server
-        phone_number: Phone number for authentication
-        dulayni_api_key: Dulayni API key to skip authentication
-        model: Model name to use
-        agent_type: Type of agent ("react" or "deep_react")
-        thread_id: Thread ID for conversation continuity
-        system_prompt: Custom system prompt for the agent
-        mcp_servers: Dictionary with MCP server configurations
-        memory_db: Path to SQLite database for conversation memory
-        pg_uri: PostgreSQL URI for memory storage (alternative to SQLite)
-        request_timeout: Timeout for API requests in seconds (client-side only)
-
-    Example:
-        >>> client = DulayniClient(
-        ...     phone_number="+1234567890",
-        ...     api_url="http://localhost:8002"
-        ... )
-        >>> # Authentication happens automatically on first query
-        >>> response = client.query("What's 2+2?")
-        >>> print(response)
     """
 
     def __init__(
@@ -65,7 +184,7 @@ class DulayniClient:
         mcp_servers: Optional[Dict[str, Any]] = None,
         memory_db: Optional[str] = None,
         pg_uri: Optional[str] = None,
-        request_timeout: float = 300.0,  # Client-side timeout, not sent to server
+        request_timeout: float = 300.0,
     ):
         # Set API URL default, but remove /run_agent suffix for flexibility
         if api_url:
@@ -95,6 +214,9 @@ class DulayniClient:
         self.auth_token = None
         self.verification_session_id = None
 
+        # Tool execution display
+        self.tool_display = ToolExecutionDisplay()
+
     def set_auth_token(self, auth_token: str):
         """Set authentication token manually."""
         self.auth_token = auth_token
@@ -112,16 +234,6 @@ class DulayniClient:
     ) -> Dict[str, Any]:
         """
         Request a verification code to be sent via WhatsApp.
-
-        Args:
-            phone_number: Phone number to send code to. If not provided, uses instance phone_number.
-
-        Returns:
-            Dict containing session_id and status
-
-        Raises:
-            DulayniAuthenticationError: If phone number is invalid or request fails
-            DulayniConnectionError: If unable to connect to server
         """
         # Skip if Dulayni API key is provided
         if self.dulayni_api_key:
@@ -175,17 +287,6 @@ class DulayniClient:
     ) -> Dict[str, Any]:
         """
         Verify the 4-digit code received via WhatsApp.
-
-        Args:
-            verification_code: 4-digit verification code
-            session_id: Session ID from request_verification_code. If not provided, uses stored session_id.
-
-        Returns:
-            Dict containing auth_token and status
-
-        Raises:
-            DulayniAuthenticationError: If verification fails
-            DulayniConnectionError: If unable to connect to server
         """
         # Skip if Dulayni API key is provided
         if self.dulayni_api_key:
@@ -234,16 +335,6 @@ class DulayniClient:
     def authenticate(self, verification_code_callback=None) -> bool:
         """
         Complete authentication flow: request code and verify it.
-
-        Args:
-            verification_code_callback: Function that prompts user for verification code.
-                                      If not provided, will raise an exception with session_id.
-
-        Returns:
-            bool: True if authentication successful
-
-        Raises:
-            DulayniAuthenticationError: If authentication fails or phone number not set
         """
         # Skip if Dulayni API key is provided
         if self.dulayni_api_key:
@@ -273,9 +364,6 @@ class DulayniClient:
     def query_stream(self, content: str, **kwargs) -> Generator[Dict[str, Any], None, None]:
         """
         Execute a query against the dulayni agent with streaming response.
-        
-        Yields:
-            Dict containing message data as it becomes available
         """
         # Check authentication - allow either Dulayni key or WhatsApp auth
         if not self.is_authenticated and not self.dulayni_api_key:
@@ -312,7 +400,26 @@ class DulayniClient:
             client = sseclient.SSEClient(response)
             for event in client.events():
                 if event.data:
-                    yield json.loads(event.data)
+                    data = json.loads(event.data)
+                    
+                    # Handle different event types
+                    if data.get("type") == "tool_start":
+                        self.tool_display.start_tool(
+                            data["tool_name"], 
+                            data["tool_call_id"],
+                            data.get("input", {})
+                        )
+                    elif data.get("type") == "tool_end":
+                        self.tool_display.end_tool(
+                            data["tool_name"], 
+                            data["tool_call_id"],
+                            data.get("output", ""),
+                            data.get("execution_time", 0)
+                        )
+                    elif data.get("type") == "todos_update":
+                        self.tool_display.update_todos(data.get("content", ""))
+                    elif data.get("type") == "message":
+                        yield data
 
         except requests.exceptions.ConnectionError:
             raise DulayniConnectionError(
@@ -333,29 +440,6 @@ class DulayniClient:
     def query(self, content: str, **kwargs) -> str:
         """
         Execute a query against the dulayni agent.
-
-        Automatically handles authentication if not already authenticated.
-
-        Args:
-            content: The query string to send to the agent
-            **kwargs: Additional parameters to override instance values
-                - model: Override the model for this query
-                - agent_type: Override the agent type for this query
-                - system_prompt: Override the system prompt for this query
-                - thread_id: Override the thread ID for this query
-                - memory_db: Override the memory database for this query
-                - mcp_servers: Override the MCP servers config for this query
-                - pg_uri: Override the PostgreSQL URI for this query
-                - dulayni_api_key: Override the Dulayni API key for this query
-
-        Returns:
-            str: The response from the dulayni agent
-
-        Raises:
-            DulayniAuthenticationError: If authentication is required but fails
-            DulayniConnectionError: If unable to connect to the server
-            DulayniTimeoutError: If the request times out
-            DulayniClientError: For other API errors
         """
         # Check authentication - allow either Dulayni key or WhatsApp auth
         if not self.is_authenticated and not self.dulayni_api_key:
@@ -407,19 +491,6 @@ class DulayniClient:
     def query_json(self, content: str, **kwargs) -> Dict[str, Any]:
         """
         Execute a query and return the full JSON response.
-
-        Args:
-            content: The query string to send to the agent
-            **kwargs: Additional parameters to override instance values
-
-        Returns:
-            Dict[str, Any]: The full JSON response from the server
-
-        Raises:
-            DulayniAuthenticationError: If authentication is required but fails
-            DulayniConnectionError: If unable to connect to the server
-            DulayniTimeoutError: If the request times out
-            DulayniClientError: For other API errors
         """
         # Check authentication - allow either Dulayni key or WhatsApp auth
         if not self.is_authenticated and not self.dulayni_api_key:
@@ -539,10 +610,7 @@ class DulayniClient:
 
     def health_check(self) -> Dict[str, Any]:
         """
-        Check if the dulayni server is healthy and reachable using the /health endpoint.
-
-        Returns:
-            Dict[str, Any]: Health status response from server, or error info if unreachable
+        Check if the dulayni server is healthy and reachable.
         """
         try:
             # Use the server's health endpoint
@@ -572,9 +640,6 @@ class DulayniClient:
     def is_healthy(self) -> bool:
         """
         Simple boolean check if server is healthy.
-
-        Returns:
-            bool: True if server is healthy, False otherwise
         """
         health_status = self.health_check()
         return health_status.get("status") == "healthy"

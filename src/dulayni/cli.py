@@ -1,4 +1,4 @@
-#-> src/dulayni/cli.py
+
 #!/usr/bin/env python3
 """Dulayni CLI Client - Interact with dulayni RAG agents via API."""
 
@@ -14,6 +14,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.live import Live
 from rich.panel import Panel
+from rich.table import Table
 
 from .client import DulayniClient
 from .exceptions import (
@@ -202,7 +203,7 @@ def save_dulayni_key(api_key: str):
     console.print("[green]✓ Dulayni API key saved to .dulayni_key[/green]")
 
 
-# Session management functions (unchanged)
+# Session management functions
 def get_session_path() -> Path:
     """Get path to session file."""
     return Path.home() / ".dulayni" / "session.json"
@@ -241,7 +242,7 @@ def is_session_valid(session_data: Dict[str, Any]) -> bool:
     return time.time() < expiry_time
 
 
-# FRPC management functions (unchanged)
+# FRPC management functions
 def get_frpc_dir() -> Path:
     """Get path to frpc directory."""
     return Path(".frpc")
@@ -709,14 +710,24 @@ def run(stream: bool, **cli_args):
             # Batch mode
             try:
                 if stream:
-                    # Stream the response
-                    console.print("[cyan]Streaming mode enabled[/cyan]")
+                    # Enhanced streaming mode
+                    console.print("[cyan]Enhanced streaming mode enabled[/cyan]")
+                    console.print(Panel(
+                        "[bold green]🚀 Starting query execution...[/bold green]",
+                        border_style="green"
+                    ))
+                    
                     for message in client.query_stream(merged_config["query"]):
                         if message.get("type") == "message" and message.get("content"):
                             if merged_config.get("print_mode") == "json":
                                 print(json.dumps(message, indent=2))
                             else:
-                                console.print(Markdown(message["content"]))
+                                console.print(Panel(
+                                    Markdown(message["content"]),
+                                    title="[bold green]🤖 Assistant Response[/bold green]",
+                                    border_style="green",
+                                    padding=(1, 2)
+                                ))
                 else:
                     # Non-streaming mode
                     if merged_config.get("print_mode") == "json":
@@ -724,7 +735,12 @@ def run(stream: bool, **cli_args):
                         print(json.dumps(result, indent=2))
                     else:
                         result = client.query(merged_config["query"])
-                        console.print(Markdown(result))
+                        console.print(Panel(
+                            Markdown(result),
+                            title="[bold green]🤖 Assistant Response[/bold green]",
+                            border_style="green",
+                            padding=(1, 2)
+                        ))
             except (
                 DulayniConnectionError,
                 DulayniTimeoutError,
@@ -736,7 +752,11 @@ def run(stream: bool, **cli_args):
         else:
             # Interactive mode
             console.print(
-                "[bold green]Dulayni Client - Interactive mode. Type 'q' to quit.[/bold green]"
+                Panel(
+                    "[bold green]Dulayni Client - Interactive Mode[/bold green]\n"
+                    "[yellow]Type 'q' to quit, 'clear' to clear screen[/yellow]",
+                    border_style="green"
+                )
             )
 
             # Print configuration info
@@ -774,43 +794,65 @@ def run(stream: bool, **cli_args):
             health_status = client.health_check()
             if health_status.get("status") != "healthy":
                 console.print(
-                    f"[red]Warning: Server health check failed - {health_status.get('message', 'Unknown error')}[/red]"
+                    Panel(
+                        f"[red]Warning: Server health check failed - {health_status.get('message', 'Unknown error')}[/red]",
+                        title="[bold red]⚠️  Server Warning[/bold red]",
+                        border_style="red"
+                    )
                 )
                 if health_status.get("error") == "connection_error":
                     console.print(
                         "[red]Make sure the dulayni server is running and accessible.[/red]"
                     )
             else:
-                console.print("[green]✓ Server connection OK[/green]")
+                console.print(Panel(
+                    "[green]✓ Server connection OK[/green]",
+                    border_style="green"
+                ))
                 debug_tools = health_status.get("debug_tools")
                 if debug_tools is not None:
                     console.print(f"[cyan]Debug tools enabled: {debug_tools}[/cyan]")
 
             while True:
                 try:
-                    user_input = console.input("[bold blue]> [/bold blue]")
+                    user_input = console.input("[bold blue]💬 > [/bold blue]")
                     if user_input.strip().lower() == "q":
                         break
+                    if user_input.strip().lower() == "clear":
+                        console.clear()
+                        continue
                     if not user_input.strip():
                         continue
 
                     if stream:
-                        # Stream the response with live updates
-                        console.print("[cyan]Processing...[/cyan]")
+                        # Enhanced streaming mode with tool execution display
+                        console.print(Panel(
+                            f"[bold blue]Processing: {user_input}[/bold blue]",
+                            border_style="blue"
+                        ))
+                        
                         full_response = ""
-                        with Live(console=console, refresh_per_second=4) as live:
-                            for message in client.query_stream(user_input):
-                                if message.get("type") == "message" and message.get("content"):
-                                    full_response = message["content"]
-                                    live.update(Markdown(full_response))
-                        console.print(Markdown(full_response))
+                        for message in client.query_stream(user_input):
+                            if message.get("type") == "message" and message.get("content"):
+                                full_response = message["content"]
+                                console.print(Panel(
+                                    Markdown(full_response),
+                                    title="[bold green]🤖 Assistant Response[/bold green]",
+                                    border_style="green",
+                                    padding=(1, 2)
+                                ))
                     else:
                         # Non-streaming mode
                         result = client.query(user_input)
-                        console.print(Markdown(result))
+                        console.print(Panel(
+                            Markdown(result),
+                            title="[bold green]🤖 Assistant Response[/bold green]",
+                            border_style="green",
+                            padding=(1, 2)
+                        ))
 
                 except KeyboardInterrupt:
-                    console.print("\n[yellow]Goodbye![/yellow]")
+                    console.print("\n[yellow]👋 Goodbye![/yellow]")
                     break
                 except (
                     DulayniConnectionError,
@@ -818,9 +860,17 @@ def run(stream: bool, **cli_args):
                     DulayniClientError,
                     DulayniAuthenticationError,
                 ) as e:
-                    console.print(f"[red]Error: {str(e)}[/red]")
+                    console.print(Panel(
+                        f"[red]Error: {str(e)}[/red]",
+                        title="[bold red]❌ Error[/bold red]",
+                        border_style="red"
+                    ))
                 except Exception as e:
-                    console.print(f"[red]Unexpected error: {str(e)}[/red]")
+                    console.print(Panel(
+                        f"[red]Unexpected error: {str(e)}[/red]",
+                        title="[bold red]❌ Unexpected Error[/bold red]",
+                        border_style="red"
+                    ))
 
     finally:
         # Always try to stop the MCP server gracefully
@@ -870,7 +920,7 @@ def status():
             console.print("[green]✓ Valid authentication session found[/green]")
         else:
             console.print("[yellow]⚠ No valid authentication session (will need to verify on next run)[/yellow]")
-        
+
         # Check FRPC status
         if is_docker_available():
             check_result = subprocess.run(
