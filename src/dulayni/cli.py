@@ -1,3 +1,4 @@
+#-> src/dulayni/cli.py
 #!/usr/bin/env python3
 """Dulayni CLI Client - Interact with dulayni RAG agents via API."""
 
@@ -11,6 +12,8 @@ from typing import Optional, Dict, Any
 import click
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.live import Live
+from rich.panel import Panel
 
 from .client import DulayniClient
 from .exceptions import (
@@ -593,7 +596,8 @@ def init(phone_number: Optional[str], dulayni_key: Optional[str], auth_method: O
 @click.option("--thread_id", help="Thread ID for conversation continuity")
 @click.option("--skip-frpc", is_flag=True, help="Skip FRPC container check")
 @click.option("--dulayni-api-key", help="Dulayni API key (override config)")
-def run(**cli_args):
+@click.option("--stream", is_flag=True, help="Enable streaming mode")
+def run(stream: bool, **cli_args):
     """Run a query using the dulayni agent."""
     
     # Check if project is initialized
@@ -704,12 +708,23 @@ def run(**cli_args):
         if merged_config.get("query"):
             # Batch mode
             try:
-                if merged_config.get("print_mode") == "json":
-                    result = client.query_json(merged_config["query"])
-                    print(json.dumps(result, indent=2))
+                if stream:
+                    # Stream the response
+                    console.print("[cyan]Streaming mode enabled[/cyan]")
+                    for message in client.query_stream(merged_config["query"]):
+                        if message.get("type") == "message" and message.get("content"):
+                            if merged_config.get("print_mode") == "json":
+                                print(json.dumps(message, indent=2))
+                            else:
+                                console.print(Markdown(message["content"]))
                 else:
-                    result = client.query(merged_config["query"])
-                    console.print(Markdown(result))
+                    # Non-streaming mode
+                    if merged_config.get("print_mode") == "json":
+                        result = client.query_json(merged_config["query"])
+                        print(json.dumps(result, indent=2))
+                    else:
+                        result = client.query(merged_config["query"])
+                        console.print(Markdown(result))
             except (
                 DulayniConnectionError,
                 DulayniTimeoutError,
@@ -750,6 +765,9 @@ def run(**cli_args):
             console.print(
                 f"[yellow]MCP servers: {len(merged_config.get('mcp_servers', {})) if 'mcp_servers' in merged_config else 'server default'} configured[/yellow]"
             )
+            console.print(
+                f"[yellow]Streaming mode: {'enabled' if stream else 'disabled'}[/yellow]"
+            )
 
             # Health check
             console.print("[yellow]Checking server connection...[/yellow]")
@@ -776,8 +794,20 @@ def run(**cli_args):
                     if not user_input.strip():
                         continue
 
-                    result = client.query(user_input)
-                    console.print(Markdown(result))
+                    if stream:
+                        # Stream the response with live updates
+                        console.print("[cyan]Processing...[/cyan]")
+                        full_response = ""
+                        with Live(console=console, refresh_per_second=4) as live:
+                            for message in client.query_stream(user_input):
+                                if message.get("type") == "message" and message.get("content"):
+                                    full_response = message["content"]
+                                    live.update(Markdown(full_response))
+                        console.print(Markdown(full_response))
+                    else:
+                        # Non-streaming mode
+                        result = client.query(user_input)
+                        console.print(Markdown(result))
 
                 except KeyboardInterrupt:
                     console.print("\n[yellow]Goodbye![/yellow]")

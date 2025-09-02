@@ -17,6 +17,7 @@ dependencies = [
     "requests>=2.31.0",
     "rich>=14.0.0",
     "docker>=6.0.0",
+    "sseclient-py>=1.8.0",
 ]
 
 [project.scripts]

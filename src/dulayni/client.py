@@ -1,6 +1,8 @@
+#-> src/dulayni/client.py
 import requests
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Generator
 import json
+import sseclient
 
 from .exceptions import (
     DulayniClientError,
@@ -72,6 +74,7 @@ class DulayniClient:
             self.base_url = "http://localhost:8002"
 
         self.api_url = f"{self.base_url}/run_agent"
+        self.stream_api_url = f"{self.base_url}/run_agent_stream"
         self.auth_url = f"{self.base_url}/auth"
         self.verify_url = f"{self.base_url}/verify"
 
@@ -266,6 +269,66 @@ class DulayniClient:
                 f"Verification code sent to {self.phone_number}. "
                 f"Call verify_code() with the 4-digit code. Session ID: {auth_result.get('session_id')}"
             )
+
+    def query_stream(self, content: str, **kwargs) -> Generator[Dict[str, Any], None, None]:
+        """
+        Execute a query against the dulayni agent with streaming response.
+        
+        Yields:
+            Dict containing message data as it becomes available
+        """
+        # Check authentication - allow either Dulayni key or WhatsApp auth
+        if not self.is_authenticated and not self.dulayni_api_key:
+            raise DulayniAuthenticationError(
+                "Authentication required. Call authenticate() or verify_code() first, or provide Dulayni API key."
+            )
+
+        payload = self._build_payload(content, **kwargs)
+        headers = {}
+        if self.auth_token:
+            headers["Authorization"] = f"Bearer {self.auth_token}"
+
+        try:
+            # Use the streaming endpoint
+            response = requests.post(
+                self.stream_api_url,
+                json=payload,
+                headers=headers,
+                timeout=self.request_timeout,
+                stream=True
+            )
+
+            # Handle authentication errors
+            if response.status_code == 401:
+                self.is_authenticated = False
+                self.auth_token = None
+                raise DulayniAuthenticationError(
+                    "Authentication expired. Please authenticate again."
+                )
+
+            response.raise_for_status()
+            
+            # Parse Server-Sent Events
+            client = sseclient.SSEClient(response)
+            for event in client.events():
+                if event.data:
+                    yield json.loads(event.data)
+
+        except requests.exceptions.ConnectionError:
+            raise DulayniConnectionError(
+                f"Could not connect to dulayni server at {self.base_url}. "
+                "Make sure the server is running."
+            )
+        except requests.exceptions.Timeout:
+            raise DulayniTimeoutError(
+                "Request timed out. The query may be taking too long to process."
+            )
+        except requests.exceptions.RequestException as e:
+            if hasattr(e, "response") and e.response and e.response.status_code == 401:
+                # Already handled above
+                pass
+            else:
+                raise DulayniClientError(f"API Error: {str(e)}")
 
     def query(self, content: str, **kwargs) -> str:
         """
