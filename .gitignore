@@ -2,7 +2,8 @@
 dulayni.txt
 uv.lock
 *.sqlite
-config
+config/
+!src/dulayni/config
 Pipfile*
 frpc/
 

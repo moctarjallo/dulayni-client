@@ -27,11 +27,9 @@ import aiofiles.os
 import psutil
 from fastmcp import FastMCP
 
-
 @dataclass
 class FileInfo:
     """File metadata information."""
-
     size: int
     created: datetime
     modified: datetime
@@ -39,7 +37,6 @@ class FileInfo:
     is_directory: bool
     is_file: bool
     permissions: str
-
 
 class PathValidator:
     """Handles path validation and security checks."""
@@ -108,7 +105,6 @@ class PathValidator:
                 )
 
         return absolute_path
-
 
 class CommandExecutor:
     """Handles secure command execution with validation and safety measures."""
@@ -261,6 +257,7 @@ class CommandExecutor:
         start_time = time.time()
         max_memory_mb = 0
         max_cpu_percent = 0
+        process = None
 
         try:
             # Execute command
@@ -348,7 +345,7 @@ class CommandExecutor:
 
         except asyncio.TimeoutError:
             # Kill the process if it's still running
-            if process.returncode is None:
+            if process and process.returncode is None:
                 try:
                     # Try graceful termination first
                     if psutil_process:

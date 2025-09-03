@@ -33,20 +33,22 @@ class ToolExecutionDisplay:
         self.active_tools[tool_call_id] = {
             "name": tool_name,
             "start_time": time.time(),
-            "spinner": Spinner("dots", text=f"Executing {tool_name} on {input_args}...")
+            "spinner": Spinner("dots", text=f"Executing {tool_name} on {input_args}..."),
         }
-        
+
         # Create a panel for the tool execution
         panel = Panel(
             self.active_tools[tool_call_id]["spinner"],
             title=f"[bold blue]🛠️  Executing {tool_name}[/bold blue]",
             subtitle=f"Started at {time.strftime('%H:%M:%S')}",
             border_style="blue",
-            padding=(1, 2)
+            padding=(1, 2),
         )
-        
+
         # Start a live display for this tool
-        self.live_displays[tool_call_id] = Live(panel, console=self.console, refresh_per_second=10)
+        self.live_displays[tool_call_id] = Live(
+            panel, console=self.console, refresh_per_second=10
+        )
         self.live_displays[tool_call_id].start()
         
     def end_tool(self, tool_name, tool_call_id, output, execution_time):
@@ -56,19 +58,19 @@ class ToolExecutionDisplay:
             if tool_call_id in self.live_displays:
                 self.live_displays[tool_call_id].stop()
                 del self.live_displays[tool_call_id]
-            
+
             # Format the output
             output_content = self._format_output(output)
-            
+
             # Create completion panel
             completion_panel = Panel(
                 output_content,
                 title=f"[bold green]✅ Completed {tool_name}[/bold green]",
                 subtitle=f"Execution time: {execution_time:.2f}s",
                 border_style="green",
-                padding=(1, 2)
+                padding=(1, 2),
             )
-            
+
             self.console.print(completion_panel)
             del self.active_tools[tool_call_id]
 
@@ -76,94 +78,111 @@ class ToolExecutionDisplay:
         """Format the tool output appropriately"""
         if not output:
             return Text("No output", style="italic")
-        
+
         # Try to detect and format JSON
-        json_match = re.search(r'\{.*\}', output, re.DOTALL)
+        json_match = re.search(r"\{.*\}", output, re.DOTALL)
         if json_match:
             try:
                 json_data = json.loads(json_match.group())
                 formatted_json = json.dumps(json_data, indent=2)
                 return Syntax(formatted_json, "json", theme="monokai", line_numbers=True)
-            except:
+            except Exception:
                 pass
-        
+
         # Try to detect code blocks
-        code_match = re.search(r'```(\w+)?\s*(.*?)```', output, re.DOTALL)
+        code_match = re.search(r"```(\w+)?\s*(.*?)```", output, re.DOTALL)
         if code_match:
             language = code_match.group(1) or "text"
             code_content = code_match.group(2).strip()
             return Syntax(code_content, language, theme="monokai", line_numbers=True)
-        
+
         # Default to text with markdown rendering
         try:
             return Markdown(output)
-        except:
+        except Exception:
             return Text(output)
 
     def update_todos(self, todos_content):
         """Display todos in a formatted table with status indicators."""
         if not todos_content:
             return
-            
+
         try:
             # Parse the todos JSON
             todos = ast.literal_eval(todos_content)
-            
+
             if not todos:
                 return
-                
+
             # Create a table for todos
             table = Table(
-                title="📋 Task List", 
-                show_header=True, 
+                title="📋 Task List",
+                show_header=True,
                 header_style="bold magenta",
                 box=None,
                 padding=(0, 1),
-                show_lines=True
+                show_lines=True,
             )
             table.add_column("Status", style="cyan", justify="center", width=10)
             table.add_column("Task", style="white", no_wrap=False)
-            
+
             # Add todos to table with appropriate status indicators
             for todo in todos:
                 if not isinstance(todo, dict):
                     continue
-                    
-                status = todo.get('status', 'pending')
-                task_content = todo.get('content', 'Unknown task')
-                
+
+                status = todo.get("status", "pending")
+                task_content = todo.get("content", "Unknown task")
+
                 # Format based on status
-                if status == 'completed':
+                if status == "completed":
                     status_icon = "[green]✅[/green]"
                     task_style = "dim"
-                elif status == 'in_progress':
+                elif status == "in_progress":
                     status_icon = "[blue]🔄[/blue]"
                     task_style = "bold blue"
                 else:  # pending
                     status_icon = "[yellow]⏳[/yellow]"
                     task_style = "yellow"
-                    
-                table.add_row(status_icon, f"[{task_style}]{task_content}[/{task_style}]")
-            
+
+                table.add_row(
+                    status_icon, f"[{task_style}]{task_content}[/{task_style}]"
+                )
+
             # Add summary
-            completed = sum(1 for todo in todos if isinstance(todo, dict) and todo.get('status') == 'completed')
-            in_progress = sum(1 for todo in todos if isinstance(todo, dict) and todo.get('status') == 'in_progress')
-            pending = sum(1 for todo in todos if isinstance(todo, dict) and todo.get('status') == 'pending')
-            
-            summary_text = f"[green]✅ {completed} completed[/green] | [blue]🔄 {in_progress} in progress[/blue] | [yellow]⏳ {pending} pending[/yellow]"
-            
+            completed = sum(
+                1
+                for todo in todos
+                if isinstance(todo, dict) and todo.get("status") == "completed"
+            )
+            in_progress = sum(
+                1
+                for todo in todos
+                if isinstance(todo, dict) and todo.get("status") == "in_progress"
+            )
+            pending = sum(
+                1
+                for todo in todos
+                if isinstance(todo, dict) and todo.get("status") == "pending"
+            )
+
+            summary_text = (
+                f"[green]✅ {completed} completed[/green] | "
+                f"[blue]🔄 {in_progress} in progress[/blue] | "
+                f"[yellow]⏳ {pending} pending[/yellow]"
+            )
+
             panel = Panel(
                 table,
                 title="[bold yellow]Task Management[/bold yellow]",
                 subtitle=summary_text,
                 border_style="yellow",
-                padding=(1, 1)
+                padding=(1, 1),
             )
             self.console.print(panel)
-            
+
         except Exception as e:
             # Silently fail on todos parsing errors
-            # if DEBUG_TOOLS:
             self.console.print(f"[yellow]Could not parse todos: {e}[/yellow]")
 
 
