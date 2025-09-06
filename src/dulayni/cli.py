@@ -43,6 +43,31 @@ def merge_config_with_args(config: Dict[str, Any], **cli_args) -> Dict[str, Any]
     return ConfigManager.merge_config_with_args(config, **cli_args)
 
 
+def read_markdown_file(file_path: str) -> str:
+    """Read and return contents of a markdown file."""
+    try:
+        path = Path(file_path)
+        if not path.exists():
+            raise click.ClickException(f"Markdown file not found: {file_path}")
+        
+        if not path.suffix.lower() in ['.md', '.markdown']:
+            console.print(f"[yellow]Warning: File '{file_path}' doesn't have a markdown extension (.md/.markdown)[/yellow]")
+        
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read().strip()
+        
+        if not content:
+            raise click.ClickException(f"Markdown file is empty: {file_path}")
+        
+        console.print(f"[green]✓ Loaded query from: {file_path}[/green]")
+        return content
+    
+    except Exception as e:
+        if isinstance(e, click.ClickException):
+            raise
+        raise click.ClickException(f"Error reading markdown file '{file_path}': {str(e)}")
+
+
 @click.group()
 def cli():
     """Dulayni CLI Client - Interact with dulayni RAG agents via API."""
@@ -78,6 +103,12 @@ def init(phone_number: Optional[str], dulayni_key: Optional[str], auth_method: O
     "--model", "-m", type=click.Choice(["gpt-4o", "gpt-4o-mini"]), help="Model name"
 )
 @click.option("--query", "-q", type=str, help="Query string for batch mode")
+@click.option(
+    "--markdown", 
+    "-md", 
+    type=str, 
+    help="Path to markdown file containing the query"
+)
 @click.option("--memory_db", help="Path to SQLite database for conversation memory")
 @click.option("--pg_uri", help="PostgreSQL URI for memory storage")
 @click.option(
@@ -104,9 +135,24 @@ def run(stream: bool, **cli_args):
         console.print("[yellow]Please run '[bold cyan]dulayni init[/bold cyan]' first to initialize your project.[/yellow]")
         raise click.Abort()
 
+    # Handle markdown file input
+    markdown_file = cli_args.pop("markdown", None)
+    query_arg = cli_args.get("query")
+    
+    # Validate that only one query method is used
+    if markdown_file and query_arg:
+        console.print("[red]Error: Cannot use both --query (-q) and --markdown (-md) options simultaneously.[/red]")
+        console.print("[yellow]Please use either --query for direct text input or --markdown for file input.[/yellow]")
+        raise click.Abort()
+
     # Load configuration file first
     config_path = cli_args.pop("config")
     config = load_config(config_path)
+
+    # Read query from markdown file if specified
+    if markdown_file:
+        query_content = read_markdown_file(markdown_file)
+        cli_args["query"] = query_content
 
     # Merge config with CLI arguments
     merged_config = merge_config_with_args(config, **cli_args)
@@ -177,6 +223,13 @@ def run(stream: bool, **cli_args):
         if merged_config.get("query"):
             # Batch mode
             try:
+                # Show query source if it came from a markdown file
+                if markdown_file:
+                    console.print(Panel(
+                        f"[bold blue]📄 Query loaded from: {markdown_file}[/bold blue]",
+                        border_style="blue"
+                    ))
+
                 if stream:
                     # Enhanced streaming mode
                     console.print("[cyan]Enhanced streaming mode enabled[/cyan]")
