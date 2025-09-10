@@ -89,10 +89,10 @@ DEFAULT_CONFIG_TEMPLATE = """{{
 # Config template for Dulayni API key usage
 DULAYNI_CONFIG_TEMPLATE = """{{
   "dulayni_api_key_file": ".dulayni_key",
-  "api_url": "https://dulayni.kajande.com/run_agent",
+  "api_url": "http://0.0.0.0:8002",
   
   "agent": {{
-    "model": "gpt-4o-mini",
+    "model": "gpt-5-mini",
     "agent_type": "deep_react",
     "system_prompt": "You are a helpful assistant for customer support tasks.",
     "startup_timeout": 30.0,
@@ -102,12 +102,12 @@ DULAYNI_CONFIG_TEMPLATE = """{{
   "memory": {{
     "memory_db": "memory.sqlite",
     "pg_uri": null,
-    "thread_id": "default"
+    "thread_id": "{api_key_number}"
   }},
   
   "mcpServers": {{
     "filesystem": {{
-      "url": "http://localhost:8080/mcp",
+      "url": "http://{api_key_number}.{relay_host}.nip.io/mcp",
       "transport": "streamable_http"
     }}
   }}

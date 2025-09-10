@@ -1,5 +1,6 @@
-"""Templates for frpc configuration and Dockerfile."""
 
+
+# Updated templates
 FRPC_TOML_TEMPLATE = """serverAddr = "{host}"
 serverPort = 7000
 
@@ -11,7 +12,7 @@ token = "supersecret"
 name = "client-app"
 type = "http"
 localPort = 8003
-customDomains = ["{phone_number}.{host}.nip.io"]
+customDomains = ["{identifier}.{host}.nip.io"]
 
 """
 

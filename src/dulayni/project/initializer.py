@@ -1,5 +1,6 @@
 """Project initialization utilities."""
 
+import hashlib
 from pathlib import Path
 import time
 from typing import Optional
@@ -73,6 +74,23 @@ class ProjectInitializer:
         key_file.write_text(api_key)
         key_file.chmod(0o600)  # Make it readable only by owner
         self.console.print("[green]✓ Dulayni API key saved to .dulayni_key[/green]")
+    
+    def convert_api_key_to_number(self, api_key: str) -> str:
+        """Convert API key to a phone-number-like identifier."""
+        # Create a hash of the API key
+        hash_obj = hashlib.sha256(api_key.encode('utf-8'))
+        hex_hash = hash_obj.hexdigest()
+        
+        # Convert first 10 characters of hex to decimal
+        hex_portion = hex_hash[:10]
+        decimal_number = int(hex_portion, 16)
+        
+        # Format as phone number-like string with country code
+        # Keep it within reasonable phone number length (10-15 digits)
+        phone_like = f"{decimal_number % 9999999999999}"  # Limit to 13 digits max
+        
+        self.console.print(f"[cyan]Generated identifier from API key: {phone_like}[/cyan]")
+        return phone_like
 
     def create_config_file(self, phone_number: Optional[str] = None, use_dulayni: bool = False):
         """Create the config/config.json file."""
@@ -80,9 +98,15 @@ class ProjectInitializer:
         config_dir.mkdir(exist_ok=True)
         
         config_file = config_dir / "config.json"
-        
+
         if use_dulayni:
-            config_content = DULAYNI_CONFIG_TEMPLATE
+            with open('.dulayni_key', 'r') as f:
+                dulayni_key = f.read()
+                api_key_number = self.convert_api_key_to_number(dulayni_key)
+                config_content = DULAYNI_CONFIG_TEMPLATE.format(
+                    api_key_number=api_key_number,
+                    relay_host=RELAY_HOST
+                )
             self.console.print(f"[green]✓ Created config file for Dulayni API key usage: {config_file}[/green]")
         else:
             # Clean phone number for URL (remove + and other special chars)
@@ -167,11 +191,17 @@ class ProjectInitializer:
                 self.save_dulayni_key(dulayni_key)
                 self.create_config_file(use_dulayni=True)
                 
+                # Generate identifier for FRPC setup
+                api_key_number = self.convert_api_key_to_number(dulayni_key)
+                
                 self.console.print("[cyan]Using Dulayni API key authentication[/cyan]")
                 
-                # Skip FRPC setup for Dulayni
-                self.console.print("\n[bold]Step 3: FRPC setup[/bold]")
-                self.console.print("[yellow]Skipping FRPC setup (not needed for Dulayni authentication)[/yellow]")
+                # Set up FRPC for Dulayni (using the generated identifier)
+                self.console.print("\n[bold]Step 3: Setting up FRPC[/bold]")
+                if self.frpc_manager.is_configured(api_key_number):
+                    self.console.print("[green]FRPC is already configured[/green]")
+                else:
+                    self.frpc_manager.setup_frpc(api_key_number, host=RELAY_HOST)
                 
                 # Skip WhatsApp authentication
                 self.console.print("\n[bold]Step 4: Authentication[/bold]")
@@ -225,11 +255,11 @@ class ProjectInitializer:
             self.console.print("• Git repository (if not already present)")
             self.console.print("• .gitignore file with dulayni entries")
             self.console.print("• config/config.json with your settings")
+            self.console.print("• .frpc/ directory with tunnel configuration")
             
             if use_dulayni:
                 self.console.print("• .dulayni_key file (secure API key storage)")
             else:
-                self.console.print("• .frpc/ directory with tunnel configuration")
                 self.console.print("• Authentication session (if successful)")
             
             self.console.print("\n[bold]Next steps:[/bold]")

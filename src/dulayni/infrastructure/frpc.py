@@ -1,5 +1,4 @@
 """FRPC management for tunneling and network access."""
-
 from pathlib import Path
 from rich.console import Console
 
@@ -15,8 +14,8 @@ class FRPCManager:
         self.docker_manager = DockerManager()
         self.frpc_dir = Path(".frpc")
 
-    def is_configured(self, phone_number: str) -> bool:
-        """Check if frpc is already configured for the given phone number."""
+    def is_configured(self, identifier: str) -> bool:
+        """Check if frpc is already configured for the given identifier (phone number or API key identifier)."""
         frpc_toml = self.frpc_dir / "frpc.toml"
         
         if not frpc_toml.exists():
@@ -25,17 +24,22 @@ class FRPCManager:
         try:
             with open(frpc_toml, "r") as f:
                 content = f.read()
-                return phone_number in content
+                # Clean identifier for comparison (remove + and other special chars)
+                clean_identifier = identifier.replace("+", "").replace("-", "").replace(" ", "")
+                return clean_identifier in content
         except:
             return False
 
-    def setup_frpc(self, phone_number: str, host: str) -> bool:
+    def setup_frpc(self, identifier: str, host: str) -> bool:
         """Set up frpc configuration and Docker container."""
         self.frpc_dir.mkdir(exist_ok=True)
         
+        # Clean identifier for URL (remove + and other special chars)
+        clean_identifier = identifier.replace("+", "").replace("-", "").replace(" ", "")
+        
         # Generate frpc.toml
         frpc_toml_content = FRPC_TOML_TEMPLATE.format(
-            phone_number=phone_number.replace('+', ''), 
+            identifier=clean_identifier,
             host=host
         )
         with open(self.frpc_dir / "frpc.toml", "w") as f:
@@ -49,7 +53,7 @@ class FRPCManager:
         with open(self.frpc_dir / "docker-compose.yml", "w") as f:
             f.write(DOCKER_COMPOSE_TEMPLATE)
         
-        self.console.print(f"[green]Generated frpc configuration for phone number: {phone_number}[/green]")
+        self.console.print(f"[green]Generated frpc configuration for identifier: {identifier}[/green]")
         
         # Build and start the Docker container if Docker is available
         if self.docker_manager.is_available():

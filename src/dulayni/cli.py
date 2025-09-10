@@ -6,6 +6,7 @@ import json
 import time
 import subprocess
 import shutil
+import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Any
 import click
@@ -66,6 +67,23 @@ def read_markdown_file(file_path: str) -> str:
         if isinstance(e, click.ClickException):
             raise
         raise click.ClickException(f"Error reading markdown file '{file_path}': {str(e)}")
+
+
+def convert_api_key_to_identifier(api_key: str) -> str:
+    """Convert API key to a phone-number-like identifier for FRPC setup."""
+    # Create a hash of the API key
+    hash_obj = hashlib.sha256(api_key.encode('utf-8'))
+    hex_hash = hash_obj.hexdigest()
+    
+    # Convert first 10 characters of hex to decimal
+    hex_portion = hex_hash[:10]
+    decimal_number = int(hex_portion, 16)
+    
+    # Format as phone number-like string with country code
+    # Keep it within reasonable phone number length (10-15 digits)
+    phone_like = f"{decimal_number % 9999999999999}"  # Limit to 13 digits max
+    
+    return phone_like
 
 
 @click.group()
@@ -174,14 +192,24 @@ def run(stream: bool, **cli_args):
     else:
         console.print(f"[cyan]Using WhatsApp authentication with phone: {phone_number}[/cyan]")
 
-    # Handle FRPC setup (only for WhatsApp auth)
+    # Handle FRPC setup for both authentication methods
     skip_frpc = cli_args.pop("skip_frpc", False)
-    if not using_dulayni and not skip_frpc and phone_number and DockerManager.is_available():
+    if not skip_frpc and DockerManager.is_available():
         frpc_manager = FRPCManager()
+        
+        # Determine identifier for FRPC setup
+        if using_dulayni:
+            # For Dulayni, use API key-derived identifier
+            frpc_identifier = convert_api_key_to_identifier(dulayni_key)
+            console.print(f"[cyan]Using FRPC identifier derived from API key: {frpc_identifier}[/cyan]")
+        else:
+            # For WhatsApp, use phone number
+            frpc_identifier = phone_number
+        
         # Check if frpc container is running
         if not frpc_manager.docker_manager.is_container_running("frpc"):
             console.print("[yellow]FRPC container is not running. Attempting to start it...[/yellow]")
-            if not frpc_manager.setup_frpc(phone_number, host="157.230.76.226"):
+            if not frpc_manager.setup_frpc(frpc_identifier, host="157.230.76.226"):
                 console.print("[yellow]Failed to start FRPC container. Proceeding without it...[/yellow]")
 
     # Start MCP filesystem server in background (only if not using Dulayni with custom MCP)
@@ -432,6 +460,19 @@ def status():
     if dulayni_key:
         console.print("[green]✓ Dulayni API key configured[/green]")
         console.print("Authentication method: Dulayni API key")
+        
+        # Show FRPC status for Dulayni
+        if DockerManager.is_available():
+            frpc_manager = FRPCManager()
+            frpc_identifier = convert_api_key_to_identifier(dulayni_key)
+            console.print(f"FRPC identifier: {frpc_identifier}")
+            if frpc_manager.docker_manager.is_container_running("frpc"):
+                console.print("[green]✓ FRPC container is running[/green]")
+            else:
+                console.print("[yellow]⚠ FRPC container is not running[/yellow]")
+        else:
+            console.print("[yellow]⚠ Docker not available for FRPC[/yellow]")
+            
     elif phone_number:
         console.print(f"[green]✓ WhatsApp authentication configured ({phone_number})[/green]")
         console.print("Authentication method: WhatsApp verification")
