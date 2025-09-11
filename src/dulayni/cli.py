@@ -22,6 +22,7 @@ from .exceptions import (
     DulayniConnectionError,
     DulayniTimeoutError,
     DulayniAuthenticationError,
+    DulayniPaymentRequiredError,
 )
 from .mcp.start import start_server, stop_server, DEFAULT_PORT
 from .project.initializer import ProjectInitializer
@@ -144,7 +145,8 @@ def init(phone_number: Optional[str], dulayni_key: Optional[str], auth_method: O
 @click.option("--skip-frpc", is_flag=True, help="Skip FRPC container check")
 @click.option("--dulayni-api-key", help="Dulayni API key (override config)")
 @click.option("--stream", is_flag=True, help="Enable streaming mode")
-def run(stream: bool, **cli_args):
+@click.option("--check-balance", is_flag=True, help="Check account balance before query")
+def run(stream: bool, check_balance: bool, **cli_args):
     """Run a query using the dulayni agent."""
 
     # Check if project is initialized
@@ -247,6 +249,30 @@ def run(stream: bool, **cli_args):
             if not auth_manager.handle_whatsapp_authentication(client, phone_number):
                 raise click.Abort()
 
+        # Check balance if requested
+        if check_balance and not using_dulayni:
+            try:
+                balance_info = client.get_balance()
+                console.print(Panel(
+                    f"Phone: [bold]{balance_info['phone_number']}[/bold]\n"
+                    f"Balance: [green]${balance_info['balance']:.2f}[/green]\n"
+                    f"Request cost: ${balance_info['request_cost']:.2f}",
+                    title="[bold blue]💰 Account Balance[/bold blue]",
+                    border_style="blue"
+                ))
+            except DulayniPaymentRequiredError as e:
+                console.print(Panel(
+                    f"[red]Insufficient balance![/red]\n\n"
+                    f"Current balance: ${e.payment_info.get('current_balance', 0):.2f}\n"
+                    f"Request cost: ${e.payment_info.get('required_balance', 0):.2f}\n\n"
+                    f"Please top up your account at: [blue][link={e.payment_info['payment_url']}]{e.payment_info['payment_url']}[/link][/blue]",
+                    title="[bold red]⚠️  Payment Required[/bold red]",
+                    border_style="red"
+                ))
+                raise click.Abort()
+            except Exception as e:
+                console.print(f"[yellow]Could not check balance: {str(e)}[/yellow]")
+
         # Handle query execution
         if merged_config.get("query"):
             # Batch mode
@@ -290,6 +316,16 @@ def run(stream: bool, **cli_args):
                             border_style="green",
                             padding=(1, 2)
                         ))
+            except DulayniPaymentRequiredError as e:
+                console.print(Panel(
+                    f"[red]Insufficient balance![/red]\n\n"
+                    f"Current balance: ${e.payment_info.get('current_balance', 0):.2f}\n"
+                    f"Request cost: ${e.payment_info.get('required_balance', 0):.2f}\n\n"
+                    f"Please top up your account at: [blue][link={e.payment_info['detail']['payment_url']}]{e.payment_info['detail']['payment_url']}[/link][/blue]",
+                    title="[bold red]⚠️  Payment Required[/bold red]",
+                    border_style="red"
+                ))
+                raise click.Abort()
             except (
                 DulayniConnectionError,
                 DulayniTimeoutError,
@@ -303,7 +339,7 @@ def run(stream: bool, **cli_args):
             console.print(
                 Panel(
                     "[bold green]Dulayni Client - Interactive Mode[/bold green]\n"
-                    "[yellow]Type 'q' to quit, 'clear' to clear screen[/yellow]",
+                    "[yellow]Type 'q' to quit, 'clear' to clear screen, 'balance' to check balance[/yellow]",
                     border_style="green"
                 )
             )
@@ -370,6 +406,29 @@ def run(stream: bool, **cli_args):
                     if user_input.strip().lower() == "clear":
                         console.clear()
                         continue
+                    if user_input.strip().lower() == "balance":
+                        # Check balance command
+                        try:
+                            balance_info = client.get_balance()
+                            console.print(Panel(
+                                f"Phone: [bold]{balance_info['phone_number']}[/bold]\n"
+                                f"Balance: [green]${balance_info['balance']:.2f}[/green]\n"
+                                f"Request cost: ${balance_info['request_cost']:.2f}",
+                                title="[bold blue]💰 Account Balance[/bold blue]",
+                                border_style="blue"
+                            ))
+                        except DulayniPaymentRequiredError as e:
+                            console.print(Panel(
+                                f"[red]Insufficient balance![/red]\n\n"
+                                f"Current balance: ${e.payment_info.get('current_balance', 0):.2f}\n"
+                                f"Request cost: ${e.payment_info.get('required_balance', 0):.2f}\n\n"
+                                f"Please top up your account at: [blue][link={e.payment_info['payment_url']}]{e.payment_info['payment_url']}[/link][/blue]",
+                                title="[bold red]⚠️  Payment Required[/bold red]",
+                                border_style="red"
+                            ))
+                        except Exception as e:
+                            console.print(f"[yellow]Could not check balance: {str(e)}[/yellow]")
+                        continue
                     if not user_input.strip():
                         continue
 
@@ -400,6 +459,17 @@ def run(stream: bool, **cli_args):
                             padding=(1, 2)
                         ))
 
+                except DulayniPaymentRequiredError as e:
+                    console.print(Panel(
+                        f"[red]Insufficient balance![/red]\n\n"
+                        f"Current balance: ${e.payment_info.get('current_balance', 0):.2f}\n"
+                        f"Request cost: ${e.payment_info.get('required_balance', 0):.2f}\n\n"
+                        f"Please top up your account at: [blue][link={e.payment_info['payment_url']}]{e.payment_info['payment_url']}[/link][/blue]",
+                        title="[bold red]⚠️  Payment Required[/bold red]",
+                        border_style="red"
+                    ))
+                    # Continue interactive mode after showing payment info
+                    console.print("[yellow]Please complete your payment and try again.[/yellow]")
                 except KeyboardInterrupt:
                     console.print("\n[yellow]👋 Goodbye![/yellow]")
                     break
@@ -496,6 +566,62 @@ def status():
             console.print("[yellow]⚠ Docker not available for FRPC[/yellow]")
     else:
         console.print("[red]✗ No authentication method configured[/red]")
+
+
+@cli.command()
+@click.option("--phone-number", "-p", help="Phone number for authentication")
+@click.option("--dulayni-key", "-k", help="Dulayni API key")
+def balance(phone_number: Optional[str], dulayni_key: Optional[str]):
+    """Check your account balance."""
+    # Load configuration
+    config = load_config("config/config.json")
+    merged_config = merge_config_with_args(config, phone_number=phone_number, dulayni_api_key=dulayni_key)
+
+    # Create client
+    client_params = {}
+    client_param_mapping = {
+        "api_url": "api_url",
+        "phone_number": "phone_number",
+        "dulayni_api_key": "dulayni_api_key",
+    }
+
+    for config_key, client_key in client_param_mapping.items():
+        if config_key in merged_config:
+            client_params[client_key] = merged_config[config_key]
+
+    client = DulayniClient(**client_params)
+
+    # Handle authentication
+    auth_manager = AuthenticationManager()
+    if client_params.get("dulayni_api_key"):
+        # Dulayni API key - no session management needed
+        auth_manager.handle_dulayni_authentication()
+    else:
+        # WhatsApp authentication
+        if not auth_manager.handle_whatsapp_authentication(client, client_params.get("phone_number")):
+            raise click.Abort()
+
+    try:
+        balance_info = client.get_balance()
+        console.print(Panel(
+            f"Phone: [bold]{balance_info['phone_number']}[/bold]\n"
+            f"Balance: [green]${balance_info['balance']:.2f}[/green]\n"
+            f"Request cost: ${balance_info['request_cost']:.2f}",
+            title="[bold blue]💰 Account Balance[/bold blue]",
+            border_style="blue"
+        ))
+    except DulayniPaymentRequiredError as e:
+        console.print(Panel(
+            f"[red]Insufficient balance![/red]\n\n"
+            f"Current balance: ${e.payment_info.get('current_balance', 0):.2f}\n"
+            f"Request cost: ${e.payment_info.get('required_balance', 0):.2f}\n\n"
+            f"Please top up your account at: [blue][link={e.payment_info['payment_url']}]{e.payment_info['payment_url']}[/link][/blue]",
+            title="[bold red]⚠️  Payment Required[/bold red]",
+            border_style="red"
+        ))
+    except Exception as e:
+        console.print(f"[red]Error checking balance: {str(e)}[/red]")
+        raise click.Abort()
 
 
 if __name__ == "__main__":

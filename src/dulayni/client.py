@@ -19,6 +19,7 @@ from .exceptions import (
     DulayniConnectionError,
     DulayniTimeoutError,
     DulayniAuthenticationError,
+    DulayniPaymentRequiredError,
 )
 
 
@@ -215,6 +216,7 @@ class DulayniClient:
         self.stream_api_url = f"{self.base_url}/run_agent_stream"
         self.auth_url = f"{self.base_url}/auth"
         self.verify_url = f"{self.base_url}/verify"
+        self.balance_url = f"{self.base_url}/billing/balance"
 
         # Store all parameters as-is (including None values)
         self.phone_number = phone_number
@@ -380,6 +382,56 @@ class DulayniClient:
                 f"Call verify_code() with the 4-digit code. Session ID: {auth_result.get('session_id')}"
             )
 
+    def get_balance(self) -> Dict[str, Any]:
+        """
+        Get the current user's balance.
+        Only works for WhatsApp authenticated users, not API key users.
+        """
+        if not self.is_authenticated and not self.dulayni_api_key:
+            raise DulayniAuthenticationError(
+                "Authentication required to check balance."
+            )
+
+        headers = {}
+        if self.auth_token:
+            headers["Authorization"] = f"Bearer {self.auth_token}"
+
+        try:
+            response = requests.get(
+                self.balance_url, headers=headers, timeout=self.request_timeout
+            )
+            
+            # Handle payment required errors
+            if response.status_code == 402:
+                payment_info = response.json()
+                raise DulayniPaymentRequiredError(
+                    "Payment required to access this resource",
+                    payment_info=payment_info
+                )
+                
+            response.raise_for_status()
+            return response.json()
+
+        except requests.exceptions.ConnectionError:
+            raise DulayniConnectionError(
+                f"Could not connect to dulayni server at {self.balance_url}. "
+                "Make sure the server is running."
+            )
+        except requests.exceptions.Timeout:
+            raise DulayniTimeoutError(
+                "Request timed out. Please try again."
+            )
+        except requests.exceptions.RequestException as e:
+            if hasattr(e, "response") and e.response and e.response.status_code == 400:
+                # API key users don't have billing
+                return {
+                    "message": "API key users don't have billing accounts",
+                    "phone_number": "dulayni_user",
+                    "balance": "N/A",
+                    "request_cost": "N/A"
+                }
+            raise DulayniClientError(f"API Error: {str(e)}")
+
     def query_stream(self, content: str, **kwargs) -> Generator[Dict[str, Any], None, None]:
         """
         Execute a query against the dulayni agent with streaming response.
@@ -404,6 +456,14 @@ class DulayniClient:
                 timeout=self.request_timeout,
                 stream=True
             )
+
+            # Handle payment required errors
+            if response.status_code == 402:
+                payment_info = response.json()
+                raise DulayniPaymentRequiredError(
+                    "Payment required to access this resource",
+                    payment_info=payment_info
+                )
 
             # Handle authentication errors
             if response.status_code == 401:
@@ -480,6 +540,14 @@ class DulayniClient:
                 timeout=self.request_timeout,
             )
 
+            # Handle payment required errors
+            if response.status_code == 402:
+                payment_info = response.json()
+                raise DulayniPaymentRequiredError(
+                    "Payment required to access this resource",
+                    payment_info=payment_info
+                )
+
             # Handle authentication errors
             if response.status_code == 401:
                 self.is_authenticated = False
@@ -530,6 +598,14 @@ class DulayniClient:
                 headers=headers,
                 timeout=self.request_timeout,
             )
+
+            # Handle payment required errors
+            if response.status_code == 402:
+                payment_info = response.json()
+                raise DulayniPaymentRequiredError(
+                    "Payment required to access this resource",
+                    payment_info=payment_info
+                )
 
             # Handle authentication errors
             if response.status_code == 401:

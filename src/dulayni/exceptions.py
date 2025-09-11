@@ -23,3 +23,11 @@ class DulayniAuthenticationError(DulayniClientError):
     """Raised when authentication fails or is required."""
 
     pass
+
+
+class DulayniPaymentRequiredError(DulayniClientError):
+    """Raised when payment is required to complete the request."""
+    
+    def __init__(self, message, payment_info=None):
+        super().__init__(message)
+        self.payment_info = payment_info
