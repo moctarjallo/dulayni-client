@@ -428,7 +428,6 @@ class DulayniClient:
                     "message": "API key users don't have billing accounts",
                     "phone_number": "dulayni_user",
                     "balance": "N/A",
-                    "request_cost": "N/A"
                 }
             raise DulayniClientError(f"API Error: {str(e)}")
 

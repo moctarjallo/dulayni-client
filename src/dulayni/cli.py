@@ -255,16 +255,15 @@ def run(stream: bool, check_balance: bool, **cli_args):
                 balance_info = client.get_balance()
                 console.print(Panel(
                     f"Phone: [bold]{balance_info['phone_number']}[/bold]\n"
-                    f"Balance: [green]${balance_info['balance']:.2f}[/green]\n"
-                    f"Request cost: ${balance_info['request_cost']:.2f}",
+                    f"Balance: [green]{balance_info['balance']:.2f}[/green]\n",
                     title="[bold blue]💰 Account Balance[/bold blue]",
                     border_style="blue"
                 ))
             except DulayniPaymentRequiredError as e:
                 console.print(Panel(
                     f"[red]Insufficient balance![/red]\n\n"
-                    f"Current balance: ${e.payment_info.get('current_balance', 0):.2f}\n"
-                    f"Request cost: ${e.payment_info.get('required_balance', 0):.2f}\n\n"
+                    f"Current balance: {e.payment_info.get('current_balance', 0):.2f}\n"
+                    f"Request cost: {e.payment_info.get('required_balance', 0):.2f}\n\n"
                     f"Please top up your account at: [blue][link={e.payment_info['payment_url']}]{e.payment_info['payment_url']}[/link][/blue]",
                     title="[bold red]⚠️  Payment Required[/bold red]",
                     border_style="red"
@@ -319,8 +318,8 @@ def run(stream: bool, check_balance: bool, **cli_args):
             except DulayniPaymentRequiredError as e:
                 console.print(Panel(
                     f"[red]Insufficient balance![/red]\n\n"
-                    f"Current balance: ${e.payment_info.get('current_balance', 0):.2f}\n"
-                    f"Request cost: ${e.payment_info.get('required_balance', 0):.2f}\n\n"
+                    f"Current balance: {e.payment_info.get('current_balance', 0):.2f}\n"
+                    f"Request cost: {e.payment_info.get('required_balance', 0):.2f}\n\n"
                     f"Please top up your account at: [blue][link={e.payment_info['detail']['payment_url']}]{e.payment_info['detail']['payment_url']}[/link][/blue]",
                     title="[bold red]⚠️  Payment Required[/bold red]",
                     border_style="red"
@@ -412,16 +411,15 @@ def run(stream: bool, check_balance: bool, **cli_args):
                             balance_info = client.get_balance()
                             console.print(Panel(
                                 f"Phone: [bold]{balance_info['phone_number']}[/bold]\n"
-                                f"Balance: [green]${balance_info['balance']:.2f}[/green]\n"
-                                f"Request cost: ${balance_info['request_cost']:.2f}",
+                                f"Balance: [green]{balance_info['balance']:.2f}[/green]\n",
                                 title="[bold blue]💰 Account Balance[/bold blue]",
                                 border_style="blue"
                             ))
                         except DulayniPaymentRequiredError as e:
                             console.print(Panel(
                                 f"[red]Insufficient balance![/red]\n\n"
-                                f"Current balance: ${e.payment_info.get('current_balance', 0):.2f}\n"
-                                f"Request cost: ${e.payment_info.get('required_balance', 0):.2f}\n\n"
+                                f"Current balance: {e.payment_info.get('current_balance', 0):.2f}\n"
+                                f"Request cost: {e.payment_info.get('required_balance', 0):.2f}\n\n"
                                 f"Please top up your account at: [blue][link={e.payment_info['payment_url']}]{e.payment_info['payment_url']}[/link][/blue]",
                                 title="[bold red]⚠️  Payment Required[/bold red]",
                                 border_style="red"
@@ -462,8 +460,8 @@ def run(stream: bool, check_balance: bool, **cli_args):
                 except DulayniPaymentRequiredError as e:
                     console.print(Panel(
                         f"[red]Insufficient balance![/red]\n\n"
-                        f"Current balance: ${e.payment_info.get('current_balance', 0):.2f}\n"
-                        f"Request cost: ${e.payment_info.get('required_balance', 0):.2f}\n\n"
+                        f"Current balance: {e.payment_info.get('current_balance', 0):.2f}\n"
+                        f"Request cost: {e.payment_info.get('required_balance', 0):.2f}\n\n"
                         f"Please top up your account at: [blue][link={e.payment_info['payment_url']}]{e.payment_info['payment_url']}[/link][/blue]",
                         title="[bold red]⚠️  Payment Required[/bold red]",
                         border_style="red"
@@ -605,16 +603,15 @@ def balance(phone_number: Optional[str], dulayni_key: Optional[str]):
         balance_info = client.get_balance()
         console.print(Panel(
             f"Phone: [bold]{balance_info['phone_number']}[/bold]\n"
-            f"Balance: [green]${balance_info['balance']:.2f}[/green]\n"
-            f"Request cost: ${balance_info['request_cost']:.2f}",
+            f"Balance: [green]{balance_info['balance']:.2f}[/green]\n",
             title="[bold blue]💰 Account Balance[/bold blue]",
             border_style="blue"
         ))
     except DulayniPaymentRequiredError as e:
         console.print(Panel(
             f"[red]Insufficient balance![/red]\n\n"
-            f"Current balance: ${e.payment_info.get('current_balance', 0):.2f}\n"
-            f"Request cost: ${e.payment_info.get('required_balance', 0):.2f}\n\n"
+            f"Current balance: {e.payment_info.get('current_balance', 0):.2f}\n"
+            f"Request cost: {e.payment_info.get('required_balance', 0):.2f}\n\n"
             f"Please top up your account at: [blue][link={e.payment_info['payment_url']}]{e.payment_info['payment_url']}[/link][/blue]",
             title="[bold red]⚠️  Payment Required[/bold red]",
             border_style="red"
